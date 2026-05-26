@@ -9,7 +9,7 @@ import re
 st.set_page_config(page_title="모바일 주식 분석기", page_icon="📱", layout="centered")
 
 st.title("📱 모바일 주식 분석기 프로")
-st.caption("스마트폰 최적화 / 핵심 지표 압축 버전")
+st.caption("스마트폰 최적화 / 자동 재무 진단 버전")
 
 # 한국거래소(KRX) 종목 사전 로드 (캐싱으로 속도 최적화)
 @st.cache_data
@@ -21,7 +21,7 @@ def load_krx_list():
 
 krx_list = load_krx_list()
 
-# ★ [수정] 무조건 봐야 하는 핵심 5가지 지표만 남기고 다이어트 ★
+# 무조건 봐야 하는 핵심 5가지 지표 매핑
 FINANCIAL_MAP = {
     'Total Revenue': '📈 매출액 (외형 성장)',
     'Operating Income': '💰 영업이익 (알짜 수익)',
@@ -151,7 +151,7 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     df['매도선(70)'] = 70
                     st.line_chart(df[['RSI_14', '매수선(30)', '매도선(70)']])
                     
-                    # ★ [수정] 5대 핵심 지표만 필터링하여 가독성 높게 표 구성 ★
+                    # 📋 핵심 재무제표 출력 및 자동 데이터 분석
                     st.subheader("📋 핵심 재무제표 (최근 4개년)")
                     try:
                         fs = stock_info.get_income_stmt()
@@ -159,19 +159,21 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                             st.write("제공되는 연간 재무제표 데이터가 없습니다.")
                         else:
                             formatted_fs = []
-                            # FINANCIAL_MAP에 지정된 5가지 핵심 항목만 순서대로 골라냅니다.
+                            raw_values = {}  # 분석을 위해 원본 숫자 저장할 사전
+                            
                             for target_idx, kor_name in FINANCIAL_MAP.items():
                                 if target_idx in fs.index:
                                     row = fs.loc[target_idx]
+                                    # 역순(과거->최근)으로 데이터 보관
+                                    raw_values[target_idx] = row.values[::-1] 
+                                    
                                     if '.KS' in yf_ticker or '.KQ' in yf_ticker:
-                                        # 국내 주식: 억 원 단위 변환 (단, EPS는 원 단위 유지)
-                                        if 'EPS' in kor_name:
-                                            formatted_row = [f"{val:,.0f}원" if pd.notnull(val) else "-" for val in row]
-                                        else:
+                                        if 'Total Revenue' in target_idx or 'Operating Income' in target_idx or 'Net Income' in target_idx or 'EBITDA' in target_idx:
                                             formatted_row = [f"{val/100000000:,.1f}억" if pd.notnull(val) else "-" for val in row]
+                                        else:
+                                            formatted_row = [f"{val:,.0f}원" if pd.notnull(val) else "-" for val in row]
                                     else:
-                                        # 해외 주식: 달러 수치 그대로 포맷팅 (단, EPS는 소수점 표시)
-                                        if 'EPS' in kor_name:
+                                        if 'Diluted EPS' in target_idx:
                                             formatted_row = [f"${val:,.2f}" if pd.notnull(val) else "-" for val in row]
                                         else:
                                             formatted_row = [f"${val:,.0f}" if pd.notnull(val) else "-" for val in row]
@@ -180,10 +182,45 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                             if formatted_fs:
                                 cols = ["핵심 회계 지표"] + list(fs.columns.map(lambda x: x.strftime('%Y-%m')))
                                 result_fs_df = pd.DataFrame(formatted_fs, columns=cols)
-                                
-                                # 접어두지 않고 화면에 바로 시원하게 보여주기
                                 st.dataframe(result_fs_df, use_container_width=True, hide_index=True)
-                                st.caption("💡 매출액과 영업이익이 매년 우상향하는지 확인하는 것이 핵심입니다.")
+                                
+                                # 🔍 여기서부터 AI 자동 재무 분석 스크립트 🔍
+                                st.markdown("🔍 **AI 핵심 재무 리포트**")
+                                analysis_notes = []
+                                
+                                # 1. 매출액 분석 (외형 성장성)
+                                if 'Total Revenue' in raw_values and len(raw_values['Total Revenue']) >= 2:
+                                    rev = raw_values['Total Revenue']
+                                    if pd.notnull(rev[-1]) and pd.notnull(rev[-2]):
+                                        if rev[-1] > rev[-2]:
+                                            analysis_notes.append("• **성장성:** 최근 연간 매출액이 전년 대비 증가하며 기업 외형이 지속 성장하고 있습니다. 👍")
+                                        else:
+                                            analysis_notes.append("• **성장성:** 최근 매출액이 전년 대비 정체되거나 감소했습니다. 전방 산업 둔화나 경쟁 심화 가능성이 있습니다. ⚠️")
+                                
+                                # 2. 영업이익 및 순이익 분석 (수익성 및 퀄리티)
+                                if 'Operating Income' in raw_values and len(raw_values['Operating Income']) >= 2:
+                                    op = raw_values['Operating Income']
+                                    if pd.notnull(op[-1]):
+                                        if op[-1] > 0:
+                                            if op[-1] > op[-2]:
+                                                analysis_notes.append("• **수익성:** 본업에서 벌어들이는 영업이익이 흑자 기조를 유지하며 전년 대비 알짜 성장을 이루어냈습니다. 🔥")
+                                            else:
+                                                analysis_notes.append("• **수익성:** 영업이익 흑자는 유지 중이나, 전년 대비 이익 폭이 다소 줄어들어 비용 관리가 필요한 시점입니다. 🧐")
+                                        else:
+                                            analysis_notes.append("• **수익성:** 최근 영업이익이 적자를 기록했습니다. 구조조정이나 강력한 턴어라운드 모멘텀이 없는지 확인이 필요합니다. 🚨")
+                                            
+                                # 3. 주당순이익 분석 (주주 가치)
+                                if 'Diluted EPS' in raw_values and len(raw_values['Diluted EPS']) >= 2:
+                                    eps = raw_values['Diluted EPS']
+                                    if pd.notnull(eps[-1]) and pd.notnull(eps[-2]):
+                                        if eps[-1] > eps[-2]:
+                                            analysis_notes.append("• **주주가치:** 1주당 벌어들이는 순이익(EPS)이 개선되어 주주 가치가 증대되고 있습니다. 기업의 실제 내재가치가 올라가는 긍정적 신호입니다. ✨")
+                                
+                                # 분석 결과 화면에 박스로 출력
+                                if analysis_notes:
+                                    st.info("\n".join(analysis_notes))
+                                else:
+                                    st.caption("💡 충분한 다년간의 데이터가 확보되지 않아 자동 요약 분석을 생략합니다.")
                             else:
                                 st.write("핵심 재무 항목을 매칭하지 못했습니다.")
                     except Exception as fe:
