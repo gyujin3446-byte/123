@@ -1,4 +1,6 @@
 streamlit
-yfinance
 pandas
-finance-datareader
+FinanceDataReader
+requests
+lxml
+html5lib
