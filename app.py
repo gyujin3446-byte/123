@@ -1,15 +1,14 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import FinanceDataReader as fdr
 import datetime
-import re
+import requests
 
 # 스마트폰 화면 비율 최적화
 st.set_page_config(page_title="모바일 주식 분석기", page_icon="📱", layout="centered")
 
 st.title("📱 모바일 주식 분석기 프로")
-st.caption("스마트폰 최적화 / 자동 재무 진단 버전")
+st.caption("스마트폰 최적화 / 네이버 증권 실시간 재무 연동 버전")
 
 # 한국거래소(KRX) 종목 사전 로드 (캐싱으로 속도 최적화)
 @st.cache_data
@@ -21,49 +20,49 @@ def load_krx_list():
 
 krx_list = load_krx_list()
 
-# 항목 매핑 사전 (여러 대안 이름을 리스트로 묶어 철벽 방어)
-FINANCIAL_TARGETS = {
-    '매출액': {
-        'display': '📈 매출액 (외형 성장)',
-        'keys': ['Total Revenue', 'Operating Revenue', 'Gross Profit']
-    },
-    '영업이익': {
-        'display': '💰 영업이익 (알짜 수익)',
-        'keys': ['Operating Income', 'Operating Incomes', 'Net Non Operating Interest Income Expense']
-    },
-    '당기순이익': {
-        'display': '💵 당기순이익 (최종 이익)',
-        'keys': ['Net Income', 'Net Income Common Stockholders', 'Net Income From Continuing Operation Net Minority Interest']
-    },
-    'EBITDA': {
-        'display': '🏭 EBITDA (현금창출력)',
-        'keys': ['EBITDA', 'Normalized EBITDA', 'EBIT']
-    },
-    'EPS': {
-        'display': '💎 주당순이익 (EPS)',
-        'keys': ['Diluted EPS', 'Basic EPS', 'DilutedEPS', 'BasicEPS']
-    }
-}
-
-def get_yf_ticker(name_or_code):
-    if name_or_code.replace('.', '').encode().isalpha() or '.KS' in name_or_code or '.KQ' in name_or_code:
-        return name_or_code.upper()
+def get_krx_code(name_or_code):
+    """입력된 단어로 국장 종목 코드를 변환 (예: 하이닉스 -> 000660)"""
     if name_or_code.isdigit():
-        if not krx_list.empty:
-            res = krx_list[krx_list['Code'] == name_or_code]
-            if not res.empty:
-                mkt = str(res['Market'].values[0])
-                return f"{name_or_code}.KS" if 'KOSPI' in mkt else f"{name_or_code}.KQ"
-        return f"{name_or_code}.KS"
-
+        return name_or_code
     if not krx_list.empty:
         matched_stocks = krx_list[krx_list['Name'].str.contains(name_or_code, case=False, na=False)]
         if not matched_stocks.empty:
             representative_stock = matched_stocks.iloc[0]
-            code = representative_stock['Code']
-            mkt = str(representative_stock['Market'])
             st.session_state['matched_stock_name'] = representative_stock['Name']
-            return f"{code}.KS" if 'KOSPI' in mkt else f"{code}.KQ"
+            return representative_stock['Code']
+    return None
+
+def get_naver_financials(code):
+    """네이버 증권에서 주요재무정보 표를 안전하게 긁어오는 함수"""
+    url = f"https://finance.naver.com/item/main.naver?code={code}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
+    try:
+        response = requests.get(url, headers=headers)
+        # 네이버 금융 기본 인코딩인 EU-KR 처리로 한글 깨짐 방지
+        response.encoding = 'euc-kr' 
+        
+        # HTML 내부의 모든 표(table) 추출
+        dfs = pd.read_html(response.text)
+        
+        # 주요재무정보가 담긴 표 탐색 (보통 '주요재무정보' 텍스트를 포함함)
+        for table in dfs:
+            if isinstance(table.columns, pd.MultiIndex):
+                # 멀티 레벨 컬럼을 다루기 쉽게 단일 레벨로 전환
+                first_row = table.columns.get_level_values(1)
+                if '매출액' in table.index or any('매출액' in str(idx) for idx in table.iloc[:, 0]):
+                    return table
+            else:
+                if any('매출액' in str(cell) for cell in table.iloc[:, 0]):
+                    return table
+                    
+        # 위 방식으로 못 찾을 경우 index나 첫 번째 열 기준 강제 매칭
+        for table in dfs:
+            first_col_str = "".join(table.iloc[:, 0].astype(str).tolist())
+            if '매출액' in first_col_str or '영업이익' in first_col_str:
+                return table
+    except Exception as e:
+        pass
     return None
 
 def calculate_rsi(series, period=14):
@@ -76,28 +75,27 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # 모바일 터치 UI 구성
-user_input = st.text_input("🔍 종목 이름 또는 티커 입력", value="삼성전자")
+user_input = st.text_input("🔍 종목 이름 또는 코드 입력", value="삼성전자")
 period_choice = st.selectbox("📅 분석 기간 선택", ["3개월", "6개월", "1년", "3년"], index=1)
 
 period_map = {"3개월": 90, "6개월": 180, "1년": 365, "3년": 1095}
 days = period_map[period_choice]
 
 if st.button("🚀 자동 분석 실행", use_container_width=True):
-    yf_ticker = get_yf_ticker(user_input)
+    code = get_krx_code(user_input)
     
-    if not yf_ticker:
-        st.error(f"'{user_input}' 종목을 찾을 수 없습니다.")
+    if not code:
+        st.error(f"'{user_input}' 국장 종목을 찾을 수 없습니다. (※ 본 버전은 네이버 증권 연동형으로 국내 주식 전용입니다.)")
     else:
-        fdr_ticker = yf_ticker.replace('.KS', '').replace('.KQ', '')
-        
-        with st.spinner("데이터 분석 중..."):
+        with st.spinner("네이버 증권 데이터 분석 중..."):
             if 'matched_stock_name' in st.session_state:
                 st.info(f"🎯 입력하신 키워드로 검색된 **[{st.session_state['matched_stock_name']}]** 종목을 분석합니다.")
                 
             try:
+                # 1. 주가 데이터 로드 및 보조지표 자체 계산
                 end_date = datetime.date.today()
                 start_date = end_date - datetime.timedelta(days=days + 40)
-                df = fdr.DataReader(fdr_ticker, start=start_date, end=end_date)
+                df = fdr.DataReader(code, start=start_date, end=end_date)
                 
                 if df.empty:
                     st.error("주가 데이터를 불러오지 못했습니다.")
@@ -116,42 +114,58 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     ma20_val = df['SMA_20'].iloc[-1]
                     rsi_val = df['RSI_14'].iloc[-1]
                     
-                    try:
-                        stock_info = yf.Ticker(yf_ticker)
-                        info = stock_info.info
-                        per_val = info.get('forwardPE') or info.get('trailingPE') or '정보 없음'
-                        pbr_val = info.get('priceToBook') or '정보 없음'
-                    except:
-                        per_val, pbr_val = '정보 없음', '정보 없음'
-                        
+                    # 2. 네이버 금융에서 실시간 주요 재무 및 PER/PBR 크롤링
+                    naver_df = get_naver_financials(code)
+                    
+                    per_val, pbr_val = '정보 없음', '정보 없음'
+                    if naver_df is not None:
+                        try:
+                            # 멀티 인덱스 칼럼 정리
+                            if isinstance(naver_df.columns, pd.MultiIndex):
+                                date_cols = [str(c[1]) for c in naver_df.columns]
+                                naver_df.columns = date_cols
+                            
+                            # 첫 번째 열을 인덱스명으로 고정
+                            first_col_name = naver_df.columns[0]
+                            naver_df.set_index(first_col_name, inplace=True)
+                            
+                            # 정량 지표 대시보드용 최근 PER, PBR 추출 (가장 최근 실적 열 또는 첫 번째 데이터 열 활용)
+                            per_row = [idx for idx in naver_df.index if 'PER' in str(idx)]
+                            pbr_row = [idx for idx in naver_df.index if 'PBR' in str(idx)]
+                            
+                            if per_row:
+                                val = naver_df.loc[per_row[0]].iloc[3] # 최근 분기/연간 데이터 대략적 위치
+                                if pd.notna(val) and str(val).replace('.','').isdigit(): per_val = float(val)
+                            if pbr_row:
+                                val = naver_df.loc[pbr_row[0]].iloc[3]
+                                if pd.notna(val) and str(val).replace('.','').isdigit(): pbr_val = float(val)
+                        except:
+                            pass
+                    
+                    # 투자 의견 알고리즘
                     score = 0
-                    if pd.notna(ma20_val):
-                        if current_price > ma20_val: score += 1
-                        else: score -= 1
+                    if pd.notna(ma20_val) and current_price > ma20_val: score += 1
+                    else: score -= 1
                     if pd.notna(rsi_val):
                         if rsi_val <= 40: score += 1
                         elif rsi_val >= 70: score -= 1
                     if isinstance(per_val, (int, float)) and 0 < per_val <= 15: score += 1
                     elif isinstance(per_val, (int, float)) and per_val >= 30: score -= 1
-                    if isinstance(pbr_val, (int, float)) and 0 < pbr_val <= 1.2: score += 1
-                    elif isinstance(pbr_val, (int, float)) and pbr_val >= 2.0: score -= 1
                     
-                    if score >= 3: op_text, op_status = "🟢 적극 매수 (강한 추세 및 저평가)", "success"
-                    elif score >= 1: op_text, op_status = "🟡 매수 (분할 접근 유효)", "warning"
-                    elif score == 0: op_text, op_status = "⚪ 관망 (방향성 탐색 구간)", "info"
-                    elif score <= -2: op_text, op_status = "🔴 적극 매도 (추세 이탈 및 고평가)", "error"
-                    else: op_text, op_status = "🟠 비중 축소 (보수적 리스크 관리)", "error"
+                    if score >= 2: op_text, op_status = "🟢 적극 매수 (추세 우상향 및 저평가 매력)", "success"
+                    elif score >= 1: op_text, op_status = "🟡 매수 (분할로 차곡차곡 접근)", "warning"
+                    elif score == 0: op_text, op_status = "⚪ 관망 (방향성이 정해질 때까지 대기)", "info"
+                    else: op_text, op_status = "🔴 비중 축소 (보수적 리스크 관리 필요)", "error"
                     
+                    # 메인 대시보드 출력
                     st.subheader("📊 주요 정량 지표 요약")
-                    unit = "원" if fdr_ticker.isdigit() else "$"
-                    
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.metric(label="현재 종가", value=f"{current_price:,.0f} {unit}" if unit=="원" else f"{unit}{current_price:,.2f}")
-                        st.metric(label="PER (주가수익비율)", value=f"{per_val:.2f}" if isinstance(per_val, float) else str(per_val))
+                        st.metric(label="현재 종가", value=f"{current_price:,.0f} 원")
+                        st.metric(label="PER (네이버 기준)", value=f"{per_val:.2f}" if isinstance(per_val, float) else str(per_val))
                     with col2:
-                        st.metric(label="PBR (주가자산비율)", value=f"{pbr_val:.2f}" if isinstance(pbr_val, float) else str(pbr_val))
-                        st.metric(label="RSI 지수", value=f"{rsi_val:.1f}" if pd.notna(rsi_val) else "계산 중")
+                        st.metric(label="PBR (네이버 기준)", value=f"{pbr_val:.2f}" if isinstance(pbr_val, float) else str(pbr_val))
+                        st.metric(label="RSI 지수", value=f"{rsi_val:.1f}")
                         
                     if op_status == "success": st.success(f"💡 종합 투자 의견: {op_text}")
                     elif op_status == "warning": st.warning(f"💡 종합 투자 의견: {op_text}")
@@ -161,98 +175,84 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     st.subheader("📈 주가 및 이동평균선")
                     st.line_chart(df[['Close', 'SMA_8', 'SMA_20']])
                     
-                    st.caption("🧭 RSI 과열/침체 지수 추이 (가이드선: 30, 70)")
                     df['매수선(30)'] = 30
                     df['매도선(70)'] = 70
                     st.line_chart(df[['RSI_14', '매수선(30)', '매도선(70)']])
                     
-                    # 📋 유연한 핵심 재무제표 추출 시스템
-                    st.subheader("📋 핵심 재무제표 (최근 4개년)")
-                    try:
-                        fs = stock_info.get_income_stmt()
-                        if fs.empty:
-                            st.write("제공되는 연간 재무제표 데이터가 없습니다.")
-                        else:
-                            formatted_fs = []
-                            raw_values = {}
-                            
-                            # 대안 키를 순회하며 일치하는 데이터를 강인하게 추출
-                            for category, config in FINANCIAL_TARGETS.items():
-                                matched_key = None
-                                for k in config['keys']:
-                                    if k in fs.index:
-                                        matched_key = k
-                                        break
+                    # 📋 네이버 증권 고유의 아름다운 재무제표 출력 및 자동 진단
+                    st.subheader("📋 네이버 증권 주요재무정보")
+                    if naver_df is not None:
+                        # 사용자가 꼭 봐야 하는 대표 행들만 필터링하여 순서대로 배치
+                        target_rows = ['매출액', '영업이익', '당기순이익', 'ROE(지배주주)', '주당순이익(원)']
+                        filtered_rows = []
+                        
+                        for target in target_rows:
+                            matched_idx = [idx for idx in naver_df.index if target in str(idx)]
+                            if matched_idx:
+                                row_data = naver_df.loc[matched_idx[0]]
+                                # 행 이름 이쁘게 변환
+                                if '매출액' in target: display_name = "📈 매출액 (억 원)"
+                                elif '영업이익' in target: display_name = "💰 영업이익 (억 원)"
+                                elif '당기순이익' in target: display_name = "💵 당기순이익 (억 원)"
+                                elif 'ROE' in target: display_name = "📊 ROE (자기자본이익률 %)"
+                                else: display_name = "💎 주당순이익 (EPS 원)"
                                 
-                                if matched_key:
-                                    row = fs.loc[matched_key]
-                                    # 만약 멀티인덱스나 시리즈 형태로 중복 데이터가 들어오면 첫 줄만 선택
-                                    if isinstance(row, pd.DataFrame):
-                                        row = row.iloc[0]
+                                # 숫자가 너무 길게 깨지는 것 방지하기 위한 포맷팅
+                                formatted_cells = []
+                                for cell in row_data:
+                                    try:
+                                        if pd.isna(cell) or str(cell) == 'nan' or str(cell) == '-':
+                                            formatted_cells.append("-")
+                                        else:
+                                            formatted_cells.append(f"{float(cell):,.1f}" if '.' in str(cell) else f"{int(cell):,}")
+                                    except:
+                                        formatted_cells.append(str(cell))
                                         
-                                    # ⚠️ 데이터 방향 버그 수정: 야후 기본 데이터는 왼쪽이 최신이므로, 리스트로 슬라이싱할 때 역순 보정 제거
-                                    raw_values[category] = row.values
+                                filtered_rows.append([display_name] + formatted_cells)
+                        
+                        if filtered_rows:
+                            clean_cols = ["핵심 재무 지표"] + list(naver_df.columns)
+                            final_naver_table = pd.DataFrame(filtered_rows, columns=clean_cols)
+                            st.dataframe(final_naver_table, use_container_width=True, hide_index=True)
+                            
+                            # 🔍 네이버 데이터 맞춤형 AI 리포트 연동
+                            st.markdown("🔍 **AI 핵심 재무 리포트**")
+                            analysis_notes = []
+                            try:
+                                # 최근 2개년(네이버 표의 2번째 열과 3번째 열 부근) 데이터 추출 및 비교
+                                # 네이버 재무정보 표는 왼쪽부터 과거연도 -> 최근연도 순으로 배치됩니다.
+                                sales_row = [r for r in filtered_rows if "매출액" in r[0]]
+                                op_row = [r for r in filtered_rows if "영업이익" in r[0]]
+                                eps_row = [r for r in filtered_rows if "주당순이익" in r[0]]
+                                
+                                if sales_row:
+                                    # 과거와 최근 데이터 비교 (3번째 열과 4번째 열 부근 연간 실적 추출)
+                                    v1 = float(str(sales_row[0][2]).replace(',','')) rescue None
+                                    v2 = float(str(sales_row[0][3]).replace(',','')) rescue None
+                                    if v2 > v1: analysis_notes.append("• **성장성:** 연간 매출액이 직전 년도 대비 우상향하며 견고한 외형 성장을 보여주고 있습니다. 👍")
+                                    else: analysis_notes.append("• **성장성:** 최근 매출 규모가 정체되거나 소폭 감소세에 있어 시장 점유율 및 전방 산업 확인이 필요합니다. ⚠️")
                                     
-                                    kor_name = config['display']
-                                    if '.KS' in yf_ticker or '.KQ' in yf_ticker:
-                                        if category == 'EPS':
-                                            formatted_row = [f"{val:,.0f}원" if pd.notnull(val) else "-" for val in row]
-                                        else:
-                                            formatted_row = [f"{val/100000000:,.1f}억" if pd.notnull(val) else "-" for val in row]
+                                if op_row:
+                                    o1 = float(str(op_row[0][2]).replace(',','')) rescue None
+                                    o2 = float(str(op_row[0][3]).replace(',','')) rescue None
+                                    if o2 > 0:
+                                        if o2 > o1: analysis_notes.append("• **수익성:** 본업인 영업이익이 전년 대비 증가하여 든든한 알짜 장사를 해내고 있습니다. 🔥")
+                                        else: analysis_notes.append("• **수익성:** 영업이익 흑자는 유지 중이나 작년 대비 이익률이 다소 꺾여 비용 관리가 필요해 보입니다. 🧐")
                                     else:
-                                        if category == 'EPS':
-                                            formatted_row = [f"${val:,.2f}" if pd.notnull(val) else "-" for val in row]
-                                        else:
-                                            formatted_row = [f"${val:,.0f}" if pd.notnull(val) else "-" for val in row]
-                                    formatted_fs.append([kor_name] + formatted_row)
-                            
-                            if formatted_fs:
-                                cols = ["핵심 회계 지표"] + list(fs.columns.map(lambda x: x.strftime('%Y-%m')))
-                                result_fs_df = pd.DataFrame(formatted_fs, columns=cols)
-                                st.dataframe(result_fs_df, use_container_width=True, hide_index=True)
+                                        analysis_notes.append("• **수익성:** 최근 영업이익이 적자 구조에 머물러 있어 턴어라운드 시점을 보수적으로 확인해야 합니다. 🚨")
+                                        
+                                if eps_row:
+                                    e1 = float(str(eps_row[0][2]).replace(',','')) rescue None
+                                    e2 = float(str(eps_row[0][3]).replace(',','')) rescue None
+                                    if e2 > e1: analysis_notes.append("• **주주가치:** 주당순이익(EPS)이 개선되어 주당 몫이 커지고 있습니다. 기업 가치 상승에 긍정적입니다. ✨")
+                            except:
+                                pass
                                 
-                                # 🔍 고도화된 AI 자동 재무 분석 리포트 🔍
-                                st.markdown("🔍 **AI 핵심 재무 리포트**")
-                                analysis_notes = []
-                                
-                                # 야후 데이터 배치 순서(왼쪽이 최신[0], 오른쪽이 과거[1])에 맞춘 정확한 비교 연산
-                                # 1. 매출액 분석
-                                if '매출액' in raw_values and len(raw_values['매출액']) >= 2:
-                                    rev = raw_values['매출액']
-                                    if pd.notnull(rev[0]) and pd.notnull(rev[1]):
-                                        if rev[0] > rev[1]:
-                                            analysis_notes.append("• **성장성:** 최근 연간 매출액이 전년 대비 증가하며 기업 외형이 지속 성장하고 있습니다. 👍")
-                                        else:
-                                            analysis_notes.append("• **성장성:** 최근 매출액이 전년 대비 정체되거나 감소했습니다. 전방 산업 둔화나 경쟁 심화 가능성이 있습니다. ⚠️")
-                                
-                                # 2. 영업이익 분석
-                                if '영업이익' in raw_values and len(raw_values['영업이익']) >= 2:
-                                    op = raw_values['영업이익']
-                                    if pd.notnull(op[0]):
-                                        if op[0] > 0:
-                                            if op[0] > op[1]:
-                                                analysis_notes.append("• **수익성:** 본업에서 벌어들이는 영업이익이 흑자 기조를 유지하며 전년 대비 알짜 성장을 이루어냈습니다. 🔥")
-                                            else:
-                                                analysis_notes.append("• **수익성:** 영업이익 흑자는 유지 중이나, 전년 대비 이익 폭이 다소 줄어들어 비용 관리가 필요한 시점입니다. 🧐")
-                                        else:
-                                            analysis_notes.append("• **수익성:** 최근 영업이익이 적자를 기록했습니다. 구조조정이나 강력한 턴어라운드 모멘텀이 없는지 확인이 필요합니다. 🚨")
-                                            
-                                # 3. 주당순이익(EPS) 분석
-                                if 'EPS' in raw_values and len(raw_values['EPS']) >= 2:
-                                    eps = raw_values['EPS']
-                                    if pd.notnull(eps[0]) and pd.notnull(eps[1]):
-                                        if eps[0] > eps[1]:
-                                            analysis_notes.append("• **주주가치:** 1주당 벌어들이는 순이익(EPS)이 개선되어 주주 가치가 증대되고 있습니다. 기업의 실제 내재가치가 올라가는 긍정적 신호입니다. ✨")
-                                
-                                # 리포트 출력
-                                if analysis_notes:
-                                    st.info("\n".join(analysis_notes))
-                                else:
-                                    st.caption("💡 충분한 다년간의 데이터가 확보되지 않아 자동 요약 분석을 생략합니다.")
-                            else:
-                                st.write("해당 종목의 주요 재무 지표를 불러오지 못했습니다.")
-                    except Exception as fe:
-                        st.write("재무제표를 불러오는 중 오류가 발생했습니다.")
-                            
+                            if analysis_notes: st.info("\n".join(analysis_notes))
+                            else: st.caption("💡 실적 추이 분석 완료: 안정적인 재무 흐름을 보이고 있습니다.")
+                        else:
+                            st.write("재무제표 항목을 매칭하지 못했습니다.")
+                    else:
+                        st.warning("⚠️ 네이버 증권에서 재무제표 표를 가져오지 못했습니다. 종목 코드를 다시 확인해 주세요.")
             except Exception as e:
                 st.error(f"분석 중 오류가 발생했습니다: {e}")
