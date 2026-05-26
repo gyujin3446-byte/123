@@ -2,5 +2,3 @@ streamlit
 yfinance
 pandas
 finance-datareader
-scipy
-git+https://github.com/twopirllc/pandas-ta.git@development
