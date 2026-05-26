@@ -119,6 +119,9 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
         fdr_ticker = yf_ticker.replace('.KS', '').replace('.KQ', '')
         
         with st.spinner("데이터 분석 중..."):
+            # 💡 [여기에 추가] 자동 매칭된 진짜 종목 이름을 화면에 알림으로 띄워주기
+            if 'matched_stock_name' in st.session_state:
+                st.info(f"🎯 입력하신 키워드로 검색된 **[{st.session_state['matched_stock_name']}]** 종목을 분석합니다.")
             try:
                 # 8일선, 20일선 계산을 위해 시작일을 조금 더 넉넉하게 당김
                 end_date = datetime.date.today()
