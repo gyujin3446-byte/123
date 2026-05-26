@@ -61,8 +61,11 @@ FINANCIAL_MAP = {
 }
 
 def get_yf_ticker(name_or_code):
+    # 1. 영문 티커(미국주식 등)이거나 이미 시장 접미사가 붙은 경우
     if name_or_code.replace('.', '').encode().isalpha() or '.KS' in name_or_code or '.KQ' in name_or_code:
         return name_or_code.upper()
+        
+    # 2. 숫자로만 된 종목 코드인 경우 (예: 005930)
     if name_or_code.isdigit():
         if not krx_list.empty:
             res = krx_list[krx_list['Code'] == name_or_code]
@@ -70,12 +73,24 @@ def get_yf_ticker(name_or_code):
                 mkt = str(res['Market'].values[0])
                 return f"{name_or_code}.KS" if 'KOSPI' in mkt else f"{name_or_code}.KQ"
         return f"{name_or_code}.KS"
+
+    # 3. ★ 핵심: 글자 포함(부분 일치) 자동 검색 기능 ★
     if not krx_list.empty:
-        res = krx_list[krx_list['Name'] == name_or_code]
-        if not res.empty:
-            code = res['Code'].values[0]
-            mkt = str(res['Market'].values[0])
+        # 사용자가 입력한 글자가 종목명에 '포함'되어 있는지 검사 (예: '하이닉스' -> 'SK하이닉스' 포함됨)
+        # 단, 네이버/다움 등 유사 종목 리스트가 많을 수 있으므로 시가총액/순서상 가장 상위에 있는 대표 종목을 선택
+        matched_stocks = krx_list[krx_list['Name'].str.contains(name_or_code, case=False, na=False)]
+        
+        if not matched_stocks.empty:
+            # 매칭된 종목 중 첫 번째(가장 대표 주식)를 자동 선택
+            representative_stock = matched_stocks.iloc[0]
+            code = representative_stock['Code']
+            mkt = str(representative_stock['Market'])
+            
+            # 스트림릿 화면에 어떤 종목으로 자동 매칭되었는지 친절하게 알려주기 위해 세션 변수에 임시 저장
+            st.session_state['matched_stock_name'] = representative_stock['Name']
+            
             return f"{code}.KS" if 'KOSPI' in mkt else f"{code}.KQ"
+            
     return None
 
 # 수동 RSI 계산 함수 (pandas_ta 없이 자체 계산)
