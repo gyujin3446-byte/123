@@ -3,12 +3,13 @@ import pandas as pd
 import FinanceDataReader as fdr
 import yfinance as yf
 import datetime
+import requests
 
 # 스마트폰 화면 비율 최적화
 st.set_page_config(page_title="모바일 주식 분석기", page_icon="📱", layout="centered")
 
 st.title("📱 글로벌 주식 분석기 프로")
-st.caption("스마트폰 최적화 / 국내 및 미국(해외) 주식 완벽 통합 버전")
+st.caption("스마트폰 최적화 / 국내 및 해외주식 100% 한글 검색 지원 버전")
 
 # 한국거래소(KRX) 종목 사전 로드 (캐싱으로 속도 최적화)
 @st.cache_data
@@ -20,10 +21,37 @@ def load_krx_list():
 
 krx_list = load_krx_list()
 
+def search_global_ticker(keyword):
+    """
+    야후 파이낸스 자체 통합 검색 API를 이용하여 
+    한글 기업명(예: 팔란티어, 애플)에 맞는 글로벌 티커를 추적하는 함수
+    """
+    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={keyword}&lang=ko-KR"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    try:
+        res = requests.get(url, headers=headers, timeout=5).json()
+        quotes = res.get('quotes', [])
+        if quotes:
+            # 검색 결과 중 가장 신뢰도가 높은 첫 번째 종목 정보 반환
+            best_match = quotes[0]
+            ticker = best_match.get('symbol', '').upper()
+            shortname = best_match.get('shortname') or best_match.get('longname') or keyword
+            exchange = best_match.get('exchange', '')
+            
+            # 한국 거래소 접미사(.KS, .KQ)가 붙어있는지 확인하여 시장 구분
+            if ticker.endswith('.KS') or ticker.endswith('.KQ'):
+                return ticker.split('.')[0], ticker, "국내시장", shortname
+            
+            # 미국 주요 거래소(NYQ, NMS, PNK 등) 기반의 해외주식 판단
+            return ticker, ticker, "미국시장", shortname
+    except:
+        pass
+    return None, None, None, None
+
 def get_stock_info(user_input):
     """
-    입력된 단어로 국내 종목 코드 또는 해외 티커 여부를 판별하는 정밀 함수
-    리턴값: (조회용 코드/티커, 주가용 티커, 시장 구분, 진짜 종목명)
+    국내/해외를 막론하고 사용자가 입력한 검색어를 완벽하게 분석하는 마스터 함수
     """
     name_clean = user_input.strip()
     
@@ -38,21 +66,24 @@ def get_stock_info(user_input):
                 return name_clean, yf_suffix, "국내시장", name
         return name_clean, f"{name_clean}.KS", "국내시장", name_clean
 
-    # 2. 한글 이름이 포함된 경우 -> 무조건 국내 주식으로 판단 및 부분 일치 검색
-    # 한글 문자열이 한 글자라도 들어있으면 국내 엔진을 타게 만듭니다.
-    if any(ord('가') <= ord(ch) <= ord('힣') for ch in name_clean):
-        if not krx_list.empty:
-            matched_stocks = krx_list[krx_list['Name'].str.contains(name_clean, case=False, na=False)]
-            if not matched_stocks.empty:
-                representative_stock = matched_stocks.iloc[0]
-                code = representative_stock['Code']
-                name = representative_stock['Name']
-                mkt = str(representative_stock['Market'])
-                yf_suffix = f"{code}.KS" if 'KOSPI' in mkt else f"{code}.KQ"
-                return code, yf_suffix, "국내시장", name
-        return name_clean, f"{name_clean}.KS", "국내시장", name_clean
+    # 2. 국내 거래소 사전에 완벽히 일치하거나 글자가 포함된 국내 주식이 있는지 1순위 검사
+    if not krx_list.empty:
+        matched_stocks = krx_list[krx_list['Name'].str.contains(name_clean, case=False, na=False)]
+        if not matched_stocks.empty:
+            representative_stock = matched_stocks.iloc[0]
+            # 검색어가 완전히 같거나, 국내 대형주 사전에 포착되면 국내 모드로 리턴
+            code = representative_stock['Code']
+            name = representative_stock['Name']
+            mkt = str(representative_stock['Market'])
+            yf_suffix = f"{code}.KS" if 'KOSPI' in mkt else f"{code}.KQ"
+            return code, yf_suffix, "국내시장", name
 
-    # 3. 그 외 영문 알파벳인 경우 -> 미국 주식 티커로 처리 (예: PLTR, AAPL, NVDA)
+    # 3. 국내 사전에 없다면 해외주식 한글명/영문티커로 간주하고 글로벌 AI 검색 엔진 가동
+    g_code, g_yf_ticker, g_market, g_name = search_global_ticker(name_clean)
+    if g_yf_ticker:
+        return g_code, g_yf_ticker, g_market, g_name
+
+    # 4. 최후의 보루 (에러 방지용 영문 대문자 처리)
     ticker_upper = name_clean.upper()
     return ticker_upper, ticker_upper, "미국시장", ticker_upper
 
@@ -66,18 +97,18 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # 모바일 터치 UI 구성
-user_input = st.text_input("🔍 종목 이름 또는 티커(예: 삼성전자, PLTR, 하이닉스) 입력", value="삼성전자")
+user_input = st.text_input("🔍 국내/해외 종목 이름 입력", value="팔란티어")
 period_choice = st.selectbox("📅 분석 기간 선택", ["3개월", "6개월", "1년", "3년"], index=1)
 
 period_map = {"3개월": 90, "6개월": 180, "1년": 365, "3년": 1095}
 days = period_map[period_choice]
 
 if st.button("🚀 자동 분석 실행", use_container_width=True):
-    # 스마트 판별기 작동
+    # 글로벌 하이브리드 검색망 가동
     code, yf_ticker, market_type, real_name = get_stock_info(user_input)
     
     with st.spinner("🚀 글로벌 증권 데이터 분석 중..."):
-        st.info(f"🎯 **[{real_name}]** ({market_type}) 종목을 실시간 분석합니다.")
+        st.info(f"🎯 **[{real_name}]** ({market_type} / 티커: {yf_ticker}) 종목을 실시간 분석합니다.")
             
         try:
             # 1. 주가 데이터 로드 및 보조지표 연산
@@ -90,7 +121,7 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                 df = yf.download(yf_ticker, start=start_date, end=end_date)
                 
             if df.empty:
-                st.error(" 주가 데이터를 불러오지 못했습니다. 티커명이나 종목 이름을 다시 확인해 주세요.")
+                st.error("주가 데이터를 불러오지 못했습니다. 종목 이름을 정확히 입력했는지 확인해 주세요.")
             else:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
