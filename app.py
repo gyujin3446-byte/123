@@ -39,29 +39,23 @@ def get_naver_financials(code):
     
     try:
         response = requests.get(url, headers=headers)
-        # 네이버 금융 기본 인코딩인 EU-KR 처리로 한글 깨짐 방지
-        response.encoding = 'euc-kr' 
+        response.encoding = 'euc-kr' # 한글 깨짐 방지
         
-        # HTML 내부의 모든 표(table) 추출
         dfs = pd.read_html(response.text)
         
-        # 주요재무정보가 담긴 표 탐색 (보통 '주요재무정보' 텍스트를 포함함)
         for table in dfs:
             if isinstance(table.columns, pd.MultiIndex):
-                # 멀티 레벨 컬럼을 다루기 쉽게 단일 레벨로 전환
-                first_row = table.columns.get_level_values(1)
                 if '매출액' in table.index or any('매출액' in str(idx) for idx in table.iloc[:, 0]):
                     return table
             else:
                 if any('매출액' in str(cell) for cell in table.iloc[:, 0]):
                     return table
                     
-        # 위 방식으로 못 찾을 경우 index나 첫 번째 열 기준 강제 매칭
         for table in dfs:
             first_col_str = "".join(table.iloc[:, 0].astype(str).tolist())
             if '매출액' in first_col_str or '영업이익' in first_col_str:
                 return table
-    except Exception as e:
+    except:
         pass
     return None
 
@@ -85,14 +79,14 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
     code = get_krx_code(user_input)
     
     if not code:
-        st.error(f"'{user_input}' 국장 종목을 찾을 수 없습니다. (※ 본 버전은 네이버 증권 연동형으로 국내 주식 전용입니다.)")
+        st.error(f"'{user_input}' 국장 종목을 찾을 수 없습니다. (※ 국내 주식 전용 버전입니다.)")
     else:
         with st.spinner("네이버 증권 데이터 분석 중..."):
             if 'matched_stock_name' in st.session_state:
                 st.info(f"🎯 입력하신 키워드로 검색된 **[{st.session_state['matched_stock_name']}]** 종목을 분석합니다.")
                 
             try:
-                # 1. 주가 데이터 로드 및 보조지표 자체 계산
+                # 1. 주가 데이터 및 보조지표 연산
                 end_date = datetime.date.today()
                 start_date = end_date - datetime.timedelta(days=days + 40)
                 df = fdr.DataReader(code, start=start_date, end=end_date)
@@ -114,35 +108,32 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     ma20_val = df['SMA_20'].iloc[-1]
                     rsi_val = df['RSI_14'].iloc[-1]
                     
-                    # 2. 네이버 금융에서 실시간 주요 재무 및 PER/PBR 크롤링
+                    # 2. 네이버 금융 주요 재무 정보 크롤링
                     naver_df = get_naver_financials(code)
                     
                     per_val, pbr_val = '정보 없음', '정보 없음'
                     if naver_df is not None:
                         try:
-                            # 멀티 인덱스 칼럼 정리
                             if isinstance(naver_df.columns, pd.MultiIndex):
                                 date_cols = [str(c[1]) for c in naver_df.columns]
                                 naver_df.columns = date_cols
                             
-                            # 첫 번째 열을 인덱스명으로 고정
                             first_col_name = naver_df.columns[0]
                             naver_df.set_index(first_col_name, inplace=True)
                             
-                            # 정량 지표 대시보드용 최근 PER, PBR 추출 (가장 최근 실적 열 또는 첫 번째 데이터 열 활용)
                             per_row = [idx for idx in naver_df.index if 'PER' in str(idx)]
                             pbr_row = [idx for idx in naver_df.index if 'PBR' in str(idx)]
                             
                             if per_row:
-                                val = naver_df.loc[per_row[0]].iloc[3] # 최근 분기/연간 데이터 대략적 위치
-                                if pd.notna(val) and str(val).replace('.','').isdigit(): per_val = float(val)
+                                val = naver_df.loc[per_row[0]].iloc[3]
+                                if pd.notna(val) and str(val).replace('.','').replace('-','').isdigit(): per_val = float(val)
                             if pbr_row:
                                 val = naver_df.loc[pbr_row[0]].iloc[3]
-                                if pd.notna(val) and str(val).replace('.','').isdigit(): pbr_val = float(val)
+                                if pd.notna(val) and str(val).replace('.','').replace('-','').isdigit(): pbr_val = float(val)
                         except:
                             pass
                     
-                    # 투자 의견 알고리즘
+                    # 투자 의견 스코어링
                     score = 0
                     if pd.notna(ma20_val) and current_price > ma20_val: score += 1
                     else: score -= 1
@@ -157,7 +148,7 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     elif score == 0: op_text, op_status = "⚪ 관망 (방향성이 정해질 때까지 대기)", "info"
                     else: op_text, op_status = "🔴 비중 축소 (보수적 리스크 관리 필요)", "error"
                     
-                    # 메인 대시보드 출력
+                    # 지표 대시보드 출력
                     st.subheader("📊 주요 정량 지표 요약")
                     col1, col2 = st.columns(2)
                     with col1:
@@ -179,10 +170,9 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     df['매도선(70)'] = 70
                     st.line_chart(df[['RSI_14', '매수선(30)', '매도선(70)']])
                     
-                    # 📋 네이버 증권 고유의 아름다운 재무제표 출력 및 자동 진단
+                    # 네이버 재무 표 정형화 및 출력
                     st.subheader("📋 네이버 증권 주요재무정보")
                     if naver_df is not None:
-                        # 사용자가 꼭 봐야 하는 대표 행들만 필터링하여 순서대로 배치
                         target_rows = ['매출액', '영업이익', '당기순이익', 'ROE(지배주주)', '주당순이익(원)']
                         filtered_rows = []
                         
@@ -190,18 +180,16 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                             matched_idx = [idx for idx in naver_df.index if target in str(idx)]
                             if matched_idx:
                                 row_data = naver_df.loc[matched_idx[0]]
-                                # 행 이름 이쁘게 변환
                                 if '매출액' in target: display_name = "📈 매출액 (억 원)"
                                 elif '영업이익' in target: display_name = "💰 영업이익 (억 원)"
                                 elif '당기순이익' in target: display_name = "💵 당기순이익 (억 원)"
                                 elif 'ROE' in target: display_name = "📊 ROE (자기자본이익률 %)"
                                 else: display_name = "💎 주당순이익 (EPS 원)"
                                 
-                                # 숫자가 너무 길게 깨지는 것 방지하기 위한 포맷팅
                                 formatted_cells = []
                                 for cell in row_data:
                                     try:
-                                        if pd.isna(cell) or str(cell) == 'nan' or str(cell) == '-':
+                                        if pd.isna(cell) or str(cell) in ['nan', '-', '']:
                                             formatted_cells.append("-")
                                         else:
                                             formatted_cells.append(f"{float(cell):,.1f}" if '.' in str(cell) else f"{int(cell):,}")
@@ -215,44 +203,45 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                             final_naver_table = pd.DataFrame(filtered_rows, columns=clean_cols)
                             st.dataframe(final_naver_table, use_container_width=True, hide_index=True)
                             
-                            # 🔍 네이버 데이터 맞춤형 AI 리포트 연동
+                            # 🔍 안전하게 개선된 AI 핵심 재무 분석 리포트
                             st.markdown("🔍 **AI 핵심 재무 리포트**")
                             analysis_notes = []
+                            
                             try:
-                                # 최근 2개년(네이버 표의 2번째 열과 3번째 열 부근) 데이터 추출 및 비교
-                                # 네이버 재무정보 표는 왼쪽부터 과거연도 -> 최근연도 순으로 배치됩니다.
-                                sales_row = [r for r in filtered_rows if "매출액" in r[0]]
-                                op_row = [r for r in filtered_rows if "영업이익" in r[0]]
-                                eps_row = [r for r in filtered_rows if "주당순이익" in r[0]]
+                                sales_list = [r for r in filtered_rows if "매출액" in r[0]]
+                                op_list = [r for r in filtered_rows if "영업이익" in r[0]]
+                                eps_list = [r for r in filtered_rows if "주당순이익" in r[0]]
                                 
-                                if sales_row:
-                                    # 과거와 최근 데이터 비교 (3번째 열과 4번째 열 부근 연간 실적 추출)
-                                    v1 = float(str(sales_row[0][2]).replace(',','')) rescue None
-                                    v2 = float(str(sales_row[0][3]).replace(',','')) rescue None
-                                    if v2 > v1: analysis_notes.append("• **성장성:** 연간 매출액이 직전 년도 대비 우상향하며 견고한 외형 성장을 보여주고 있습니다. 👍")
-                                    else: analysis_notes.append("• **성장성:** 최근 매출 규모가 정체되거나 소폭 감소세에 있어 시장 점유율 및 전방 산업 확인이 필요합니다. ⚠️")
+                                # 문자열 콤마 제거 후 연간 실적 추이 안전하게 비교
+                                if sales_list:
+                                    s_past = float(str(sales_list[0][2]).replace(',', ''))
+                                    s_recent = float(str(sales_list[0][3]).replace(',', ''))
+                                    if s_recent > s_past: analysis_notes.append("• **성장성:** 연간 매출액이 직전 년도 대비 우상향하며 견고한 외형 성장을 보여주고 있습니다. 👍")
+                                    else: analysis_notes.append("• **성장성:** 최근 매출 규모가 정체되거나 소폭 감소세에 있어 시장 점유율 확인이 필요합니다. ⚠️")
                                     
-                                if op_row:
-                                    o1 = float(str(op_row[0][2]).replace(',','')) rescue None
-                                    o2 = float(str(op_row[0][3]).replace(',','')) rescue None
-                                    if o2 > 0:
-                                        if o2 > o1: analysis_notes.append("• **수익성:** 본업인 영업이익이 전년 대비 증가하여 든든한 알짜 장사를 해내고 있습니다. 🔥")
+                                if op_list:
+                                    o_past = float(str(op_list[0][2]).replace(',', ''))
+                                    o_recent = float(str(op_list[0][3]).replace(',', ''))
+                                    if o_recent > 0:
+                                        if o_recent > o_past: analysis_notes.append("• **수익성:** 본업인 영업이익이 전년 대비 증가하여 든든한 알짜 장사를 해내고 있습니다. 🔥")
                                         else: analysis_notes.append("• **수익성:** 영업이익 흑자는 유지 중이나 작년 대비 이익률이 다소 꺾여 비용 관리가 필요해 보입니다. 🧐")
                                     else:
                                         analysis_notes.append("• **수익성:** 최근 영업이익이 적자 구조에 머물러 있어 턴어라운드 시점을 보수적으로 확인해야 합니다. 🚨")
                                         
-                                if eps_row:
-                                    e1 = float(str(eps_row[0][2]).replace(',','')) rescue None
-                                    e2 = float(str(eps_row[0][3]).replace(',','')) rescue None
-                                    if e2 > e1: analysis_notes.append("• **주주가치:** 주당순이익(EPS)이 개선되어 주당 몫이 커지고 있습니다. 기업 가치 상승에 긍정적입니다. ✨")
+                                if eps_list:
+                                    e_past = float(str(eps_list[0][2]).replace(',', ''))
+                                    e_recent = float(str(eps_list[0][3]).replace(',', ''))
+                                    if e_recent > e_past: analysis_notes.append("• **주주가치:** 주당순이익(EPS)이 개선되어 주당 몫이 커지고 있습니다. 기업 가치 상승에 긍정적입니다. ✨")
                             except:
                                 pass
                                 
-                            if analysis_notes: st.info("\n".join(analysis_notes))
-                            else: st.caption("💡 실적 추이 분석 완료: 안정적인 재무 흐름을 보이고 있습니다.")
+                            if analysis_notes: 
+                                st.info("\n".join(analysis_notes))
+                            else: 
+                                st.caption("💡 실적 추이 분석 완료: 전반적으로 안정적인 재무 흐름을 나타내고 있습니다.")
                         else:
                             st.write("재무제표 항목을 매칭하지 못했습니다.")
                     else:
-                        st.warning("⚠️ 네이버 증권에서 재무제표 표를 가져오지 못했습니다. 종목 코드를 다시 확인해 주세요.")
+                        st.warning("⚠️ 네이버 증권에서 재무제표 표를 가져오지 못했습니다.")
             except Exception as e:
                 st.error(f"분석 중 오류가 발생했습니다: {e}")
