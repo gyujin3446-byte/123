@@ -33,22 +33,32 @@ def get_krx_code(name_or_code):
     return None
 
 def get_naver_financials(code):
-    """네이버 증권에서 주요재무정보 표를 안전하게 긁어오는 함수"""
+    """네이버 증권 서버의 크롤링 차단을 우회하여 재무제표를 가져오는 함수"""
     url = f"https://finance.naver.com/item/main.naver?code={code}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
+    # 🔥 [핵심 수정] 네이버 보안 필터를 뚫기 위한 완벽한 일반 브라우저 위장 가면(Headers) 설정
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Referer': 'https://finance.naver.com/'
+    }
     
     try:
-        response = requests.get(url, headers=headers)
+        # 네이버 서버에 위장 헤더를 붙여서 페이지 요청
+        response = requests.get(url, headers=headers, timeout=10)
         response.encoding = 'euc-kr' # 한글 깨짐 방지
         
+        # HTML 내부의 표들을 분석 데이터프레임으로 파싱
         dfs = pd.read_html(response.text)
         
+        # 주요재무정보가 포함된 진짜 표를 필터링
         for table in dfs:
             if isinstance(table.columns, pd.MultiIndex):
-                if '매출액' in table.index or any('매출액' in str(idx) for idx in table.iloc[:, 0]):
+                if any('매출액' in str(idx) for idx in table.index) or any('매출액' in str(col) for col in table.columns.get_level_values(1)):
                     return table
             else:
-                if any('매출액' in str(cell) for cell in table.iloc[:, 0]):
+                if any('매출액' in str(cell) for cell in table.iloc[:, 0]) or any('매출액' in str(col) for col in table.columns):
                     return table
                     
         for table in dfs:
@@ -212,7 +222,6 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                 op_list = [r for r in filtered_rows if "영업이익" in r[0]]
                                 eps_list = [r for r in filtered_rows if "주당순이익" in r[0]]
                                 
-                                # 문자열 콤마 제거 후 연간 실적 추이 안전하게 비교
                                 if sales_list:
                                     s_past = float(str(sales_list[0][2]).replace(',', ''))
                                     s_recent = float(str(sales_list[0][3]).replace(',', ''))
