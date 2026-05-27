@@ -7,7 +7,7 @@ import datetime
 st.set_page_config(page_title="모바일 주식 분석기", page_icon="📱", layout="centered")
 
 st.title("📱 모바일 주식 분석기 프로")
-st.caption("스마트폰 최적화 / 핵심 재무 지표 자동 연동 버전")
+st.caption("스마트폰 최적화 / 가독성 극대화 재무 리포트 버전")
 
 # 한국거래소(KRX) 종목 사전 로드 (캐싱으로 속도 최적화)
 @st.cache_data
@@ -80,14 +80,21 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     ma20_val = df['SMA_20'].iloc[-1]
                     rsi_val = df['RSI_14'].iloc[-1]
                     
-                    # 2. 정식 거래소 API를 기반으로 기본 종목 정보 획득
+                    # 2. 정식 거래소 데이터 매핑
                     per_val, pbr_val = '정보 없음', '정보 없음'
+                    stocks_name = "해당 종목"
+                    market_type = "국내시장"
+                    industry = "기반 산업"
+                    
                     if not krx_list.empty:
                         target_info = krx_list[krx_list['Code'] == code]
                         if not target_info.empty:
-                            # KRX 데이터프레임에서 기본 PER, PBR 가져오기 시도
-                            if 'PER' in target_info.columns: per_val = target_info['PER'].values[0]
-                            if 'PBR' in target_info.columns: pbr_val = target_info['PBR'].values[0]
+                            stock_meta = target_info.iloc[0]
+                            stocks_name = stock_meta.get('Name', '종목')
+                            market_type = stock_meta.get('Market', '국내시장')
+                            industry = stock_meta.get('Sector', '기반 산업')
+                            if 'PER' in target_info.columns: per_val = stock_meta['PER']
+                            if 'PBR' in target_info.columns: pbr_val = stock_meta['PBR']
                     
                     # 투자 의견 스코어링
                     score = 0
@@ -96,7 +103,7 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     if pd.notna(rsi_val):
                         if rsi_val <= 40: score += 1
                         elif rsi_val >= 70: score -= 1
-                    if isinstance(per_val, (int, float)) and 0 < per_val <= 15: score += 1
+                    if isinstance(per_val, (int, float)) and 0 < per_val <= 12: score += 1
                     elif isinstance(per_val, (int, float)) and per_val >= 30: score -= 1
                     
                     if score >= 2: op_text, op_status = "🟢 적극 매수 (추세 우상향 및 저평가 매력)", "success"
@@ -109,9 +116,9 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     col1, col2 = st.columns(2)
                     with col1:
                         st.metric(label="현재 종가", value=f"{current_price:,.0f} 원")
-                        st.metric(label="PER", value=f"{per_val:.2f}" if isinstance(per_val, float) else str(per_val))
+                        st.metric(label="PER (가치 평가)", value=f"{per_val:.2f}" if isinstance(per_val, float) else str(per_val))
                     with col2:
-                        st.metric(label="PBR", value=f"{pbr_val:.2f}" if isinstance(pbr_val, float) else str(pbr_val))
+                        st.metric(label="PBR (자산 가치)", value=f"{pbr_val:.2f}" if isinstance(pbr_val, float) else str(pbr_val))
                         st.metric(label="RSI 지수", value=f"{rsi_val:.1f}")
                         
                     if op_status == "success": st.success(f"💡 종합 투자 의견: {op_text}")
@@ -126,52 +133,59 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     df['매도선(70)'] = 70
                     st.line_chart(df[['RSI_14', '매수선(30)', '매도선(70)']])
                     
-                    # 📋 정식 연동형 재무제표 대시보드 출력 (보안 프리 패스)
-                    st.subheader("📋 주요 기업 재무 분석 리포트")
-                    try:
-                        # FinanceDataReader의 기본 재무 정보를 조립하여 생성
-                        # 네이버 크롤링 차단 시 가장 확실한 대안 데이터를 정형화합니다.
-                        if not krx_list.empty:
-                            stock_meta = krx_list[krx_list['Code'] == code].iloc[0]
-                            
-                            # 기본 지표 데이터 추출
-                            stocks_name = stock_meta.get('Name', '종목')
-                            market_type = stock_meta.get('Market', '국내시장')
-                            industry = stock_meta.get('Sector', '기반 산업')
-                            
-                            # 화면에 정갈하게 요약 카드 노출
-                            st.info(f"🏢 **기업 프로필 요약**\n* **시장 분류:** {market_type}\n* **소속 업종:** {industry}\n* **기본 가치 평가지표 (PER/PBR):** 현재 시장 평균 대비 적정 수준을 유지하고 있는지 대조 분석이 필요합니다.")
-                            
-                            # 안전한 연간 트렌드 분석
-                            st.markdown("🔍 **AI 핵심 재무 진단**")
-                            analysis_notes = []
-                            
-                            # 1. 추세 분석 개입
-                            if current_price > ma20_val:
-                                analysis_notes.append("• **성장 및 추세:** 현재 주가가 20일 생명선 위에 안착하여 중단기 흐름이 견고하게 우상향하는 성장 궤도에 진입해 있습니다. 👍")
-                            else:
-                                analysis_notes.append("• **성장 및 추세:** 주가가 20일 이동평균선 아래에 위치해 있어, 공격적인 매수보다는 지지선을 확인하는 보수적 접근이 유리합니다. ⚠️")
+                    # 📋 [업그레이드] 정식 데이터 기반의 핵심 재무제표 표 출력
+                    st.subheader("📋 핵심 재무제표 요약")
+                    
+                    # 거래소 데이터북의 정량 값 추출 후 가독성 좋은 표로 가공
+                    if not krx_list.empty and code in krx_list['Code'].values:
+                        meta = krx_list[krx_list['Code'] == code].iloc[0]
+                        
+                        # 1억 단위나 백만 단위 등 거래소 원본 수치를 깔끔한 포맷으로 변환
+                        def format_amount(val):
+                            try:
+                                if pd.isna(val) or val == 0: return "-"
+                                return f"{float(val)/100000000:,.1f}억" if abs(val) > 1000000 else f"{int(val):,}원"
+                            except:
+                                return str(val)
                                 
-                            # 2. 투자 메리트 계산
-                            if isinstance(per_val, (int, float)) and per_val > 0:
-                                if per_val <= 12:
-                                    analysis_notes.append(f"• **밸류에이션:** 현재 PER이 {per_val:.1f}배 수준으로 본업의 벌이 대비 주가가 상당히 저평가되어 있어 가격 메리트가 훌륭합니다. 🔥")
-                                else:
-                                    analysis_notes.append(f"• **밸류에이션:** PER이 {per_val:.1f}배 수준으로 업종 평균 성장을 반영하고 있습니다. 향후 실적 턴어라운드 여부를 주시하세요. 🧐")
-                            
-                            # 3. RSI 위치 분석
-                            if rsi_val <= 40:
-                                analysis_notes.append("• **수급 상태:** RSI 지수가 40 이하로 과매도(심리적 공포) 구간에 가까워져 있어 기술적 반등 가능성이 높은 분할 매수 적기입니다. ✨")
-                            elif rsi_val >= 65:
-                                analysis_notes.append("• **수급 상태:** RSI 지수가 65 이상으로 시장의 뜨거운 관심을 받으며 과열권에 진입했습니다. 무리한 추격 매수보다는 익절 타이밍을 고민할 때입니다. 🚨")
-                            else:
-                                analysis_notes.append("• **수급 상태:** RSI 지수가 40~60 사이의 안정적인 밸런스를 유지하고 있어 매수와 매도세의 균형이 잡힌 구간입니다. ⏳")
-                                
-                            if analysis_notes:
-                                st.success("\n".join(analysis_notes))
+                        financial_data = [
+                            ["📈 매출액 (외형 성장)", format_amount(meta.get('Sales', '-'))],
+                            ["💰 영업이익 (알짜 수익)", format_amount(meta.get('OperatingProfit', '-'))],
+                            ["💵 당기순이익 (최종 이익)", format_amount(meta.get('NetIncome', '-'))],
+                            ["🏢 자산총계 (기반 체급)", format_amount(meta.get('Assets', '-'))],
+                            ["📉 부채총계 (재무 리스크)", format_amount(meta.get('Liabilities', '-'))]
+                        ]
+                        
+                        fin_df = pd.DataFrame(financial_data, columns=["핵심 재무 지표 항목", "최근 결산 실적 수치"])
+                        st.dataframe(fin_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("해당 종목의 재무 데이터 규격을 정형화하는 중입니다.")
+                    
+                    # 🔍 [업그레이드] 한 줄 한 줄 가독성을 극대화한 AI 핵심 재무 진단 리포트
+                    st.subheader("🔍 AI 핵심 재무 진단")
+                    
+                    # 1. 성장 및 추세 진단
+                    if current_price > ma20_val:
+                        st.info("📈 **성장 및 추세**\n\n현재 주가가 20일 생명선 위에 안전하게 안착했습니다. 중단기 매수세가 살아있으며, 흐름이 우상향하는 긍정적인 성장 궤도에 진입해 있습니다.")
+                    else:
+                        st.warning("⚠️ **성장 및 추세**\n\n현재 주가가 20일 생명선 아래에 위치해 있습니다. 단기 하방 압력이 존재하므로 무리한 진입보다는 주요 지지선 낙폭을 먼저 확인하는 것이 안전합니다.")
+                        
+                    # 2. 밸류에이션(PER) 진단
+                    if isinstance(per_val, (int, float)) and per_val > 0:
+                        if per_val <= 12:
+                            st.success(f"🔥 **밸류에이션 (적정 가치)**\n\n현재 PER이 {per_val:.1f}배 수준입니다. 기업이 벌어들이는 알짜 수익력에 비해 주가가 상당히 저평가되어 있어 가격 메리트가 매우 뛰어난 구간입니다.")
+                        elif per_val >= 28:
+                            st.error(f"🚨 **밸류에이션 (고평가 경고)**\n\n현재 PER이 {per_val:.1f}배 수준으로 미래 성장 기대감이 선반영된 다소 무거운 자리입니다. 추가 수급이나 실적 받침 여부를 꼼꼼히 대조해 보아야 합니다.")
                         else:
-                            st.write("해당 종목의 데이터베이스를 로드하지 못했습니다.")
-                    except:
-                        st.write("재무 데이터 연동 중 일시적 지연이 발생했습니다.")
+                            st.info(f"🧐 **... 투자 밸류에이션**\n\n현재 PER이 {per_val:.1f}배 수준으로 업종 평균 정상 범주 안에서 안정적인 가치 평가를 받고 있습니다.")
+                    
+                    # 3. 수급 및 RSI 온도계 진단
+                    if rsi_val <= 40:
+                        st.success("✨ **수급 상태 (RSI 지수)**\n\nRSI 지수가 40 이하인 과매도(심리적 공포) 영역입니다. 단기 낙폭 과대로 인해 시장에 싼 매물이 나온 상태이므로, 기술적 반등을 노린 분할 매수 접근이 아주 유효합니다.")
+                    elif rsi_val >= 65:
+                        st.error("🚨 **수급 상태 (RSI 지수)**\n\nRSI 지수가 65 이상으로 시장의 뜨거운 광기와 흥분이 섞인 과열권에 진입했습니다. 주가가 고점에 다다랐을 확률이 높으니 추격 매수보다는 분할 익절 타이밍을 노리세요.")
+                    else:
+                        st.info("⏳ **수급 상태 (RSI 지수)**\n\nRSI 지수가 40~60 사이의 안정적인 밸런스를 유지하고 있습니다. 매수세와 매도세의 균형이 단단하여 급격한 붕괴 위험이 적은 평온한 수급 상태입니다.")
+                        
             except Exception as e:
                 st.error(f"분석 중 오류가 발생했습니다: {e}")
