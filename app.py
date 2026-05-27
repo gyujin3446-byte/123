@@ -44,17 +44,9 @@ def sync_local_storage():
 
 storage_data = sync_local_storage()
 
-# 로컬스토리지 데이터가 안전하게 수신되면 세션에 반영
+# 로컬스토리지 데이터 수신 보장
 if storage_data is not None and isinstance(storage_data, list) and len(storage_data) > 0:
     st.session_state['search_history'] = storage_data
-
-# --- 🎯 2. 세션 제어용 상태 정착 및 연동 ---
-if 'search_target' not in st.session_state:
-    st.session_state['search_target'] = "삼성전자"
-if 'search_period' not in st.session_state:
-    st.session_state['search_period'] = "6개월"
-if 'run_analysis' not in st.session_state:
-    st.session_state['run_analysis'] = False
 
 # 한국거래소(KRX) 종목 사전 로드
 @st.cache_data
@@ -134,7 +126,21 @@ def calculate_rsi(series, period=14):
     rs = ema_up / ema_down
     return 100 - (100 / (1 + rs))
 
-# --- 📜 3. 사이드바 히스토리 타임라인 (상태 주입 및 즉시 실행 보장) ---
+# --- 🎯 2. 주소창 파라미터 감지 및 상태 제어 시스템 ---
+# 브라우저의 실시간 주소 파라미터를 읽어옵니다.
+qp = st.query_params
+
+# 주소창에 종목과 기간 정보가 살아있다면, 그걸 최우선 타겟으로 지정합니다.
+if "stock" in qp:
+    target_stock = qp["stock"]
+    target_period = qp.get("period", "6개월")
+    analyze_trigger = True
+else:
+    target_stock = "삼성전자"
+    target_period = "6개월"
+    analyze_trigger = False
+
+# --- 📜 3. 사이드바 히스토리 타임라인 (주소창 쿼리 강제 다이렉트 매핑) ---
 st.sidebar.header("📜 나의 검색 히스토리")
 
 if not st.session_state['search_history']:
@@ -143,36 +149,29 @@ else:
     st.sidebar.caption("💡 아래 항목을 터치하면 즉시 재분석합니다.")
     for idx, item in enumerate(reversed(st.session_state['search_history'])):
         btn_label = f"🔍 {item['name']} ({item['period']}) -> {item['opinion']}"
-        # 콜백(on_click) 구조나 복잡한 주소 파라미터를 버리고, 세션 변수를 직관적으로 바꾼 뒤 rerun을 유도
+        # 🔥 [원터치 완벽 패치] 버튼이 눌리면 주소창 파라미터를 통째로 바꾸고 rerun 시켜 꼬임을 완전 봉쇄!
         if st.sidebar.button(btn_label, key=f"hist_{idx}", use_container_width=True):
-            st.session_state['search_target'] = item['name']
-            st.session_state['search_period'] = item['period']
-            st.session_state['run_analysis'] = True
+            st.query_params.update({"stock": item['name'], "period": item['period']})
             st.rerun()
 
 # --- 📱 4. 메인 화면 UI 위젯 구성 ---
-# 입력 필드의 값 자체를 세션의 타겟 상태와 다이렉트로 결합
-user_input = st.text_input("🔍 국내/해외 종목 이름 입력", value=st.session_state['search_target'])
+user_input = st.text_input("🔍 국내/해외 종목 이름 입력", value=target_stock)
 
 period_options = ["3개월", "6개월", "1년", "3년"]
-period_index = period_options.index(st.session_state['search_period']) if st.session_state['search_period'] in period_options else 1
+period_index = period_options.index(target_period) if target_period in period_options else 1
 period_choice = st.selectbox("📅 분석 기간 선택", period_options, index=period_index)
 
 period_map = {"3개월": 90, "6개월": 180, "1년": 365, "3년": 1095}
 days = period_map[period_choice]
 
-# 메인 검색 버튼 터치 시 상태 활성화
+# 메인 분석 버튼을 직접 터치했을 때도 트리거 활성화
 if st.button("🚀 자동 분석 실행", use_container_width=True):
-    st.session_state['search_target'] = user_input
-    st.session_state['search_period'] = period_choice
-    st.session_state['run_analysis'] = True
+    st.query_params.update({"stock": user_input, "period": period_choice})
+    st.rerun()
 
-# --- 📈 5. 진짜 실시간 주가 데이터 분석 실행 영역 (버튼 및 히스토리 원터치 통합) ---
-if st.session_state['run_analysis']:
-    # 실행 직후 플래그를 꺼서 불필요한 연속 렌더링 방지
-    st.session_state['run_analysis'] = False
-    
-    code, yf_ticker, market_type, real_name = get_stock_info(st.session_state['search_target'])
+# --- 📈 5. 실시간 데이터 스트리밍 분석 및 시각화 전개 영역 ---
+if analyze_trigger:
+    code, yf_ticker, market_type, real_name = get_stock_info(target_stock)
     
     with st.spinner("🚀 글로벌 증권 데이터 분석 중..."):
         st.info(f"🎯 **[{real_name}]** ({market_type} / 티커: {yf_ticker}) 종목을 실시간 분석합니다.")
@@ -230,18 +229,18 @@ if st.session_state['run_analysis']:
                 elif score == 0: op_text = "⚪ 관망 유지"
                 else: op_text = "🔴 비중 축소"
                 
-                # 중복 확인 후 브라우저 영구 스토리지에 백업 이벤트를 전달
-                history_exists = any(h['name'] == real_name and h['period'] == st.session_state['search_period'] for h in st.session_state['search_history'])
+                # 💾 [저장소 업데이트] 중복 여부를 정교하게 판단해 배열에 추가
+                history_exists = any(h['name'] == real_name and h['period'] == target_period for h in st.session_state['search_history'])
                 if not history_exists:
                     st.session_state['search_history'].append({
                         'name': real_name,
-                        'period': st.session_state['search_period'],
+                        'period': target_period,
                         'opinion': op_text
                     })
                     html(f"""<script>window.parent.postMessage({{type: 'save_history', data: {json.dumps(st.session_state['search_history'])} }}, '*');</script>""", height=0)
                     st.rerun()
                 
-                # 대시보드 지표 카드 출력
+                # 대시보드 출력
                 st.subheader("📊 주요 정량 지표 요약")
                 unit = "원" if market_type == "국내시장" else "$"
                 
