@@ -7,7 +7,7 @@ import datetime
 st.set_page_config(page_title="모바일 주식 분석기", page_icon="📱", layout="centered")
 
 st.title("📱 모바일 주식 분석기 프로")
-st.caption("스마트폰 최적화 / 5개년 추적 및 가독성 극대화 버전")
+st.caption("스마트폰 최적화 / 5개년 추적 완벽 수정 버전")
 
 # 한국거래소(KRX) 종목 사전 로드 (캐싱으로 속도 최적화)
 @st.cache_data
@@ -137,16 +137,13 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                         
                         for t in raw_tables:
                             first_col_str = "".join(t.iloc[:, 0].astype(str).tolist())
-                            # '매출액'과 '영업이익' 글자 자체를 유연하게 포괄하는 표 레이아웃 수색
                             if '매출' in first_col_str and '영업이익' in first_col_str:
                                 target_table = t
                                 break
                                 
                         if target_table is not None:
-                            # 첫 컬럼명을 인덱스로 고정
                             target_table.set_index(target_table.columns[0], inplace=True)
                             
-                            # 최근 5개년 데이터 열(Column) 슬라이싱
                             valid_cols = [c for c in target_table.columns if '20' in str(c) or '전년' in str(c)]
                             valid_cols = valid_cols[:5]
                             
@@ -162,7 +159,6 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                             extracted_values = {}
                             
                             for key, display_name in display_rows.items():
-                                # 🔥 [핵심 수정] 글자가 완벽히 같지 않아도 포함되어 있으면 무조건 매칭 (예: '영업이익(손실)'도 탈탈 털어 가져옴)
                                 matched_idx = [idx for idx in target_table.index if key in str(idx).replace(' ', '')]
                                 if matched_idx:
                                     row_data = target_table.loc[matched_idx[0]]
@@ -185,7 +181,8 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                     final_rows.append([display_name] + formatted_cells)
                             
                             if final_rows:
-                                clean_headers = ["핵심 회계 지표 항목"] + [str(col).split('(')[0] for col in valid_cols]
+                                # 🔥 [버그 원인 제거] col이 무조건 문자열(str)이 되도록 보장하여 sequence item 오류 완벽 차단
+                                clean_headers = ["핵심 회계 지표 항목"] + [str(col).split('(')[0] if pd.notna(col) else "데이터" for col in valid_cols]
                                 output_df = pd.DataFrame(final_rows, columns=clean_headers)
                                 st.dataframe(output_df, use_container_width=True, hide_index=True)
                                 
