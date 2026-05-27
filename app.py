@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import FinanceDataReader as fdr
 import datetime
+import re
 
 # 스마트폰 화면 비율 최적화
 st.set_page_config(page_title="모바일 주식 분석기", page_icon="📱", layout="centered")
 
 st.title("📱 모바일 주식 분석기 프로")
-st.caption("스마트폰 최적화 / 5개년 재무제표 완벽 연동 버전")
+st.caption("스마트폰 최적화 / 3개년 압축 및 가독성 극대화 버전")
 
 # 한국거래소(KRX) 종목 사전 로드 (캐싱으로 속도 최적화)
 @st.cache_data
@@ -126,8 +127,8 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     df['매도선(70)'] = 70
                     st.line_chart(df[['RSI_14', '매수선(30)', '매도선(70)']])
                     
-                    # 📋 에프앤가이드 원본 테이블 추출 시스템
-                    st.subheader("📋 핵심 재무제표 (최근 5개년 추이)")
+                    # 📋 에프앤가이드 정식 데이터 허브를 이용한 3개년 표 빌드
+                    st.subheader("📋 핵심 재무제표 (최근 3개년 추이)")
                     
                     fnguide_url = f"https://comp.fnguide.com/SVO2/ASP/SVD_Main.asp?gicode=A{code}"
                     
@@ -142,13 +143,13 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                 break
                                 
                         if target_table is not None:
-                            # 첫 번째 열을 문자열로 깔끔히 정비한 후 인덱스로 지정
+                            # 첫 번째 열을 인덱스로 지정
                             target_table.iloc[:, 0] = target_table.iloc[:, 0].astype(str).str.replace(' ', '')
                             target_table.set_index(target_table.columns[0], inplace=True)
                             
-                            # 2010~2020년대 연도 컬럼만 안전하게 필터링 (최대 가로 5개 칸)
+                            # 3개년 데이터 열만 필터링 (가로 폭 최적화)
                             valid_cols = [c for c in target_table.columns if '20' in str(c)]
-                            valid_cols = valid_cols[:5]
+                            valid_cols = valid_cols[:3]
                             
                             # 추출할 5가지 핵심 행 목록
                             row_mapping = {
@@ -163,7 +164,6 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                             extracted_values = {}
                             
                             for f_key, display_name in row_mapping.items():
-                                # 이름이 부분 포함되는 행 찾기
                                 matched_idx = [idx for idx in target_table.index if f_key in idx]
                                 if matched_idx:
                                     row_data = target_table.loc[matched_idx[0]]
@@ -173,7 +173,6 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                     vals = row_data[valid_cols].values
                                     extracted_values[f_key] = vals
                                     
-                                    # 값 포맷팅
                                     formatted_cells = []
                                     for v in vals:
                                         try:
@@ -186,14 +185,15 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                     final_rows.append([display_name] + formatted_cells)
                             
                             if final_rows:
-                                # 🔥 [핵심 수정] 타임에러를 일으키던 split 연산을 완전히 제거하고, 원본 헤더 이름을 안전하게 문자열 변환하여 사용
-                                str_headers = ["핵심 회계 지표 항목"] + [str(c) for c in valid_cols]
-                                output_df = pd.DataFrame(final_rows, columns=str_headers)
-                                
-                                # 화면에 정갈한 5개년 가로 배치 표 출력!
+                                # 🔥 [에러 전면 차단] 문제가 되던 split 컴프리헨션을 전면 삭제하고 판다스 기본 함수만 활용
+                                clean_headers = ["핵심 회계 지표 항목"]
+                                for col in valid_cols:
+                                    clean_headers.append(re.sub(r'\(.*\)', '', str(col)).strip())
+                                    
+                                output_df = pd.DataFrame(final_rows, columns=clean_headers)
                                 st.dataframe(output_df, use_container_width=True, hide_index=True)
                                 
-                                # 🔍 한 줄 한 줄 가독성을 극대화한 AI 핵심 재무 진단 리포트
+                                # 🔍 가독성 극대화 AI 핵심 재무 진단 리포트
                                 st.subheader("🔍 AI 핵심 재무 진단")
                                 
                                 # 1. 성장 및 추세 진단
@@ -209,7 +209,7 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                         if float(str(s_data[-1]).replace(',','')) > float(str(s_data[-2]).replace(',','')):
                                             st.success("🔥 **매출 성장세 (외형 성장)**\n\n최근 연간 매출액이 직전 년도 대비 확실하게 증가했습니다. 시장 점유율을 견고하게 넓혀가며 기업의 체급이 건강하게 커지고 있는 아주 긍정적인 신호입니다.")
                                         else:
-                                            st.warning("🧐 **매출 성장세 (외형 정체)**\n\n최근 연간 매출 규모가 직전 년도 대비 다소 정체되거나 소폭 감소했습니다. 전방 산업의 수요가 일시적으로 둔화되었을 가능성이 있으니 다음 분기 실적 턴어라운드를 주시하세요.")
+                                            st.warning("🧐 **매출 성장세 (외형 정체)**\n\n최근 연간 매출 규모가 직전 년도 대비 다소 정체되거나 소폭 감소했습니다. 전방 산업의 수요가 일시적으로 둔화 되었을 가능성이 있으니 다음 분기 실적 턴어라운드를 주시하세요.")
                                     except:
                                         pass
                                 
@@ -223,7 +223,7 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                             else:
                                 st.write("재무제표의 핵심 지표 항목을 파싱하지 못했습니다.")
                         else:
-                            st.warning("⚠️ 해당 종목의 5개년 연간 실적 데이터를 구성하는 중입니다.")
+                            st.warning("⚠️ 해당 종목의 연간 실적 데이터를 구성하는 중입니다.")
                     except Exception as ex:
                         st.error(f"재무 정보 파싱 중 오류 발생: {ex}")
                         
