@@ -4,18 +4,65 @@ import FinanceDataReader as fdr
 import yfinance as yf
 import datetime
 import requests
+import json
+from streamlit.components.v1 import html
 
 # 스마트폰 화면 비율 최적화
 st.set_page_config(page_title="모바일 주식 분석기", page_icon="📱", layout="centered")
 
 st.title("📱 글로벌 주식 분석기 프로")
-st.caption("스마트폰 최적화 / 국내 및 해외주식 100% 한글 검색 지원 버전")
+st.caption("스마트폰 최적화 / 히스토리 영구 저장 및 원터치 실행 버전")
 
-# --- 💾 1. 검색 히스토리 및 입력 폼 상태 저장소 초기화 ---
+# --- 💾 1. 브라우저 localStorage 연동용 자바스크립트 컴포넌트 ---
+# 새로고침 시 세션이 날아가는 것을 방지하기 위해 로컬 스토리지와 동기화합니다.
+def sync_local_storage():
+    js_code = """
+    <script>
+    // 1. 페이지 로드 시 로컬 스토리지에서 히스토리 가져오기
+    const savedHistory = localStorage.getItem('stock_search_history');
+    if (savedHistory) {
+        window.parent.postMessage({
+            type: 'streamlit:set_component_value',
+            value: JSON.parse(savedHistory)
+        }, '*');
+    } else {
+        window.parent.postMessage({
+            type: 'streamlit:set_component_value',
+            value: []
+        }, '*');
+    }
+    
+    // 2. 스트림릿에서 새로운 히스토리가 업데이트되라는 이벤트를 수신 대기
+    window.addEventListener('message', function(e) {
+        if (e.data && e.data.type === 'save_history') {
+            localStorage.setItem('stock_search_history', JSON.stringify(e.data.data));
+        }
+    });
+    </script>
+    """
+    # 투명한 컴포넌트로 데이터 브릿지 역할 수행
+    return html(js_code, height=0)
+
+# 브라우저 스토리지 값 수신
+storage_data = sync_local_storage()
+
+# 수신된 로컬스토리지 데이터를 세션 상태에 정착
 if 'search_history' not in st.session_state:
     st.session_state['search_history'] = []
 
-# 히스토리 클릭 시 메인 입력창들을 강제 동기화하기 위한 뼈대 세팅
+if storage_data is not None and isinstance(storage_data, list) and len(st.session_state['search_history']) == 0:
+    st.session_state['search_history'] = storage_data
+
+# --- 🎯 2. 주소창 파라미터 기반 원터치 동기화 시스템 ---
+# 히스토리 클릭 시 꼬임 현상을 원천 차단하기 위해 주소창 변수를 우선 활용합니다.
+query_params = st.query_params
+
+if "q" in query_params:
+    st.session_state['widget_input'] = query_params["q"]
+if "p" in query_params:
+    st.session_state['widget_period'] = query_params["p"]
+
+# 위젯 초기 기본값 설정
 if 'widget_input' not in st.session_state:
     st.session_state['widget_input'] = "삼성전자"
 if 'widget_period' not in st.session_state:
@@ -99,26 +146,26 @@ def calculate_rsi(series, period=14):
     rs = ema_up / ema_down
     return 100 - (100 / (1 + rs))
 
-# --- 📋 2. 모바일 내비게이션 사이드바 (검색 히스토리 및 원터치 연동) ---
+# --- 📜 3. 사이드바 히스토리 타임라인 (주소창 쿼리 연동) ---
 st.sidebar.header("📜 나의 검색 히스토리")
 
-# 히스토리 버튼이 눌렸는지 기억하는 플래그 변수
-hist_triggered = False
+# 히스토리 강제 실행 트리거 플래그
+force_execute = False
 
 if not st.session_state['search_history']:
     st.sidebar.caption("아직 검색한 내역이 없습니다.")
 else:
     st.sidebar.caption("💡 아래 항목을 터치하면 즉시 재분석합니다.")
     for idx, item in enumerate(reversed(st.session_state['search_history'])):
-        btn_label = f"🔍 {item['name']} ({item['period']}) -> {item['opinion'].split(' ')[0]}"
-        if st.sidebar.button(btn_label, key=f"hist_{len(st.session_state['search_history'])-1-idx}", use_container_width=True):
-            # 🔥 [버그 수정 1] 히스토리 클릭 시 메인 입력창 위젯들의 세션 상태값을 직접 동기화 변환
+        btn_label = f"🔍 {item['name']} ({item['period']}) -> {item['opinion']}"
+        if st.sidebar.button(btn_label, key=f"hist_{idx}", use_container_width=True):
+            # 주소창 파라미터를 강제 변경하여 원터치 실행 렌더링 유도
+            st.query_params.update({"q": item['name'], "p": item['period']})
             st.session_state['widget_input'] = item['name']
             st.session_state['widget_period'] = item['period']
-            hist_triggered = True
+            force_execute = True
 
-# --- 📱 3. 메인 화면 UI 구성 (상태 바인딩 연동) ---
-# key 매핑을 지정하여 히스토리 데이터와 위젯의 데이터 상태를 물려줍니다.
+# --- 📱 4. 메인 화면 UI 위젯 구성 ---
 user_input = st.text_input("🔍 국내/해외 종목 이름 입력", key='widget_input')
 
 period_options = ["3개월", "6개월", "1년", "3년"]
@@ -127,10 +174,12 @@ period_choice = st.selectbox("📅 분석 기간 선택", period_options, key='w
 period_map = {"3개월": 90, "6개월": 180, "1년": 365, "3년": 1095}
 days = period_map[period_choice]
 
-# 🔥 [버그 수정 2] "자동 분석 실행" 버튼을 누르거나, 사이드바 히스토리를 클릭했을 때 동시에 즉시 트리거 작동!
-if st.button("🚀 자동 분석 실행", use_container_width=True) or hist_triggered:
-    # 무한 루프나 상태 꼬임을 방지하기 위해 플래그 초기화
-    hist_triggered = False
+# 메인 버튼 클릭 OR 주소창에 파라미터가 들어왔을 때 OR 히스토리 버튼이 감지되었을 때 단 1번만 즉시 기동!
+if st.button("🚀 자동 분석 실행", use_container_width=True) or ("q" in query_params) or force_execute:
+    
+    # 주소창 초기화로 뒤로가기/새로고침 시 오작동 방지
+    if "q" in st.query_params:
+        st.query_params.clear()
 
     code, yf_ticker, market_type, real_name = get_stock_info(user_input)
     
@@ -185,12 +234,12 @@ if st.button("🚀 자동 분석 실행", use_container_width=True) or hist_trig
                 if isinstance(per_val, (int, float)) and 0 < per_val <= 15: score += 1
                 elif isinstance(per_val, (int, float)) and per_val >= 35: score -= 1
                 
-                if score >= 2: op_text, op_status = "🟢 적극 매수", "success"
-                elif score >= 1: op_text, op_status = "🟡 분할 매수", "warning"
-                elif score == 0: op_text, op_status = "⚪ 관망 유지", "info"
-                else: op_text, op_status = "🔴 비중 축소", "error"
+                if score >= 2: op_text = "🟢 적극 매수"
+                elif score >= 1: op_text = "🟡 분할 매수"
+                elif score == 0: op_text = "⚪ 관망 유지"
+                else: op_text = "🔴 비중 축소"
                 
-                # 중복 검색 방지하면서 히스토리에 데이터 적재
+                # 💾 [핵심 로직] 중복 확인 후 브라우저 영구 스토리지에 백업 이벤트를 전달
                 history_exists = any(h['name'] == real_name and h['period'] == period_choice for h in st.session_state['search_history'])
                 if not history_exists:
                     st.session_state['search_history'].append({
@@ -198,7 +247,9 @@ if st.button("🚀 자동 분석 실행", use_container_width=True) or hist_trig
                         'period': period_choice,
                         'opinion': op_text
                     })
-                    st.rerun() # 내역 실시간 동기화 갱신
+                    # 자바스크립트를 통해 브라우저 스토리지에 강제 주입 명령 전송
+                    html(f"""<script>window.parent.postMessage({{type: 'save_history', data: {json.dumps(st.session_state['search_history'])} }}, '*');</script>""", height=0)
+                    st.rerun()
                 
                 # 메인 화면 지표 정보 출력
                 st.subheader("📊 주요 정량 지표 요약")
@@ -212,9 +263,9 @@ if st.button("🚀 자동 분석 실행", use_container_width=True) or hist_trig
                     st.metric(label="PBR", value=f"{pbr_val:.2f}" if isinstance(pbr_val, float) else str(pbr_val))
                     st.metric(label="RSI 지수", value=f"{rsi_val:.1f}")
                     
-                if op_status == "success": st.success(f"💡 종합 투자 의견: {op_text}")
-                elif op_status == "warning": st.warning(f"💡 종합 투자 의견: {op_text}")
-                elif op_status == "info": st.info(f"💡 종합 투자 의견: {op_text}")
+                if "🟢" in op_text: st.success(f"💡 종합 투자 의견: {op_text}")
+                elif "🟡" in op_text: st.warning(f"💡 종합 투자 의견: {op_text}")
+                elif "⚪" in op_text: st.info(f"💡 종합 투자 의견: {op_text}")
                 else: st.error(f"💡 종합 투자 의견: {op_text}")
                 
                 st.subheader("📈 주가 및 이동평균선")
@@ -262,31 +313,15 @@ if st.button("🚀 자동 분석 실행", use_container_width=True) or hist_trig
                     except:
                         st.write("해외 재무 정보를 로드하는 중입니다.")
                         
-               # 🔍 AI 핵심 재무 진단 리포트
+                # 🔍 AI 핵심 재무 진단 리포트
                 st.subheader("🔍 AI 핵심 재무 진단")
-                
-                # 1. 성장 및 추세 진단
                 if current_price > ma20_val:
-                    st.info("📈 **성장 및 추세**\n\n현재 주가가 20일 생명선 위에 안전하게 안착했습니다. 중단기 매수세가 살아있으며, 흐름이 우상향하는 긍정적인 성장 궤도에 진입해 있습니다.")
+                    st.info("📈 **성장 및 추세**\n\n현재 주가가 20일 생명선 위에 안전하게 안착하여 우상향 기조에 있습니다.")
                 else:
-                    st.warning("⚠️ **성장 및 추세**\n\n현재 주가가 20일 생명선 아래에 위치해 있습니다. 단기 하방 압력이 존재하므로 무리한 진입보다는 주요 지지선 낙폭을 먼저 확인하는 것이 안전합니다.")
-                    
-                # 2. 밸류에이션(PER) 진단
+                    st.warning("⚠️ **성장 및 추세**\n\n현재 주가가 20일 생명선 아래에 위치해 있어 단기 리스크 관리가 필요합니다.")
                 if isinstance(per_val, (int, float)) and per_val > 0:
-                    if per_val <= 15:
-                        st.success(f"🔥 **밸류에이션 (적정 가치)**\n\n현재 PER이 {per_val:.1f}배 수준입니다. 기업이 벌어들이는 수익력에 비해 주가가 저평가되어 있어 가격 매리트가 뛰어난 구간입니다.")
-                    elif per_val >= 30:
-                        st.error(f"🚨 **... 가치 평가 (과열 경고)**\n\n현재 PER이 {per_val:.1f}배 수준으로 미래 성장 기대감이 강하게 선반영되어 있습니다. 주가가 다소 무거운 자리이므로 신중한 접근이 필요합니다.")
-                    else:
-                        st.info(f"🧐 **... 투자 밸류에이션**\n\n현재 PER이 {per_val:.1f}배 수준으로 주가 가치가 정상 범주 안에서 안정적인 가치 평가를 받고 있습니다.")
-                
-                # 3. 수급 및 RSI 온도계 진단
-                if rsi_val <= 40:
-                    st.success("✨ **수급 상태 (RSI 지수)**\n\nRSI 지수가 40 이하인 과매도(심리적 공포) 영역입니다. 기술적 반등을 노린 분할 매수 접근이 아주 유효합니다.")
-                elif rsi_val >= 65:
-                    st.error("🚨 **수급 상태 (RSI 지수)**\n\nRSI 지수가 65 이상으로 시장의 과열권에 진입했습니다. 무리한 추격 매수보다는 분할 익절 타이밍을 노리세요.")
-                else:
-                    st.info("⏳ **수급 상태 (RSI 지수)**\n\nRSI 지수가 40~60 사이의 안정적인 수급 상태입니다. 매수세와 매도세의 균형이 단단하여 급격한 붕괴 위험이 적습니다.")
+                    if per_val <= 15: st.success(f"🔥 **밸류에이션**\n\n현재 PER이 {per_val:.1f}배 수준으로 기업 벌이 대비 상당한 저평가 구간입니다.")
+                    elif per_val >= 30: st.error(f"🚨 **... 밸류에이션**\n\n현재 PER이 {per_val:.1f}배 수준으로 단기 오버슈팅 및 과열 양상을 보입니다.")
                     
         except Exception as e:
             st.error(f"분석 중 오류가 발생했습니다: {e}")
