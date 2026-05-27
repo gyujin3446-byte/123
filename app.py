@@ -11,14 +11,15 @@ from streamlit.components.v1 import html
 st.set_page_config(page_title="모바일 주식 분석기", page_icon="📱", layout="centered")
 
 st.title("📱 글로벌 주식 분석기 프로")
-st.caption("스마트폰 최적화 / 히스토리 영구 저장 및 원터치 실행 버전")
+st.caption("스마트폰 최적화 / 영구 히스토리 및 완벽 원터치 버전")
 
 # --- 💾 1. 브라우저 localStorage 연동용 자바스크립트 컴포넌트 ---
-# 새로고침 시 세션이 날아가는 것을 방지하기 위해 로컬 스토리지와 동기화합니다.
+if 'search_history' not in st.session_state:
+    st.session_state['search_history'] = []
+
 def sync_local_storage():
     js_code = """
     <script>
-    // 1. 페이지 로드 시 로컬 스토리지에서 히스토리 가져오기
     const savedHistory = localStorage.getItem('stock_search_history');
     if (savedHistory) {
         window.parent.postMessage({
@@ -32,7 +33,6 @@ def sync_local_storage():
         }, '*');
     }
     
-    // 2. 스트림릿에서 새로운 히스토리가 업데이트되라는 이벤트를 수신 대기
     window.addEventListener('message', function(e) {
         if (e.data && e.data.type === 'save_history') {
             localStorage.setItem('stock_search_history', JSON.stringify(e.data.data));
@@ -40,35 +40,23 @@ def sync_local_storage():
     });
     </script>
     """
-    # 투명한 컴포넌트로 데이터 브릿지 역할 수행
     return html(js_code, height=0)
 
-# 브라우저 스토리지 값 수신
 storage_data = sync_local_storage()
 
-# 수신된 로컬스토리지 데이터를 세션 상태에 정착
-if 'search_history' not in st.session_state:
-    st.session_state['search_history'] = []
-
-if storage_data is not None and isinstance(storage_data, list) and len(st.session_state['search_history']) == 0:
+# 로컬스토리지 데이터가 안전하게 수신되면 세션에 반영
+if storage_data is not None and isinstance(storage_data, list) and len(storage_data) > 0:
     st.session_state['search_history'] = storage_data
 
-# --- 🎯 2. 주소창 파라미터 기반 원터치 동기화 시스템 ---
-# 히스토리 클릭 시 꼬임 현상을 원천 차단하기 위해 주소창 변수를 우선 활용합니다.
-query_params = st.query_params
+# --- 🎯 2. 세션 제어용 상태 정착 및 연동 ---
+if 'search_target' not in st.session_state:
+    st.session_state['search_target'] = "삼성전자"
+if 'search_period' not in st.session_state:
+    st.session_state['search_period'] = "6개월"
+if 'run_analysis' not in st.session_state:
+    st.session_state['run_analysis'] = False
 
-if "q" in query_params:
-    st.session_state['widget_input'] = query_params["q"]
-if "p" in query_params:
-    st.session_state['widget_period'] = query_params["p"]
-
-# 위젯 초기 기본값 설정
-if 'widget_input' not in st.session_state:
-    st.session_state['widget_input'] = "삼성전자"
-if 'widget_period' not in st.session_state:
-    st.session_state['widget_period'] = "6개월"
-
-# 한국거래소(KRX) 종목 사전 로드 (캐싱으로 속도 최적화)
+# 한국거래소(KRX) 종목 사전 로드
 @st.cache_data
 def load_krx_list():
     try:
@@ -146,11 +134,8 @@ def calculate_rsi(series, period=14):
     rs = ema_up / ema_down
     return 100 - (100 / (1 + rs))
 
-# --- 📜 3. 사이드바 히스토리 타임라인 (주소창 쿼리 연동) ---
+# --- 📜 3. 사이드바 히스토리 타임라인 (상태 주입 및 즉시 실행 보장) ---
 st.sidebar.header("📜 나의 검색 히스토리")
-
-# 히스토리 강제 실행 트리거 플래그
-force_execute = False
 
 if not st.session_state['search_history']:
     st.sidebar.caption("아직 검색한 내역이 없습니다.")
@@ -158,30 +143,36 @@ else:
     st.sidebar.caption("💡 아래 항목을 터치하면 즉시 재분석합니다.")
     for idx, item in enumerate(reversed(st.session_state['search_history'])):
         btn_label = f"🔍 {item['name']} ({item['period']}) -> {item['opinion']}"
+        # 콜백(on_click) 구조나 복잡한 주소 파라미터를 버리고, 세션 변수를 직관적으로 바꾼 뒤 rerun을 유도
         if st.sidebar.button(btn_label, key=f"hist_{idx}", use_container_width=True):
-            # 주소창 파라미터를 강제 변경하여 원터치 실행 렌더링 유도
-            st.query_params.update({"q": item['name'], "p": item['period']})
-            st.session_state['widget_input'] = item['name']
-            st.session_state['widget_period'] = item['period']
-            force_execute = True
+            st.session_state['search_target'] = item['name']
+            st.session_state['search_period'] = item['period']
+            st.session_state['run_analysis'] = True
+            st.rerun()
 
 # --- 📱 4. 메인 화면 UI 위젯 구성 ---
-user_input = st.text_input("🔍 국내/해외 종목 이름 입력", key='widget_input')
+# 입력 필드의 값 자체를 세션의 타겟 상태와 다이렉트로 결합
+user_input = st.text_input("🔍 국내/해외 종목 이름 입력", value=st.session_state['search_target'])
 
 period_options = ["3개월", "6개월", "1년", "3년"]
-period_choice = st.selectbox("📅 분석 기간 선택", period_options, key='widget_period')
+period_index = period_options.index(st.session_state['search_period']) if st.session_state['search_period'] in period_options else 1
+period_choice = st.selectbox("📅 분석 기간 선택", period_options, index=period_index)
 
 period_map = {"3개월": 90, "6개월": 180, "1년": 365, "3년": 1095}
 days = period_map[period_choice]
 
-# 메인 버튼 클릭 OR 주소창에 파라미터가 들어왔을 때 OR 히스토리 버튼이 감지되었을 때 단 1번만 즉시 기동!
-if st.button("🚀 자동 분석 실행", use_container_width=True) or ("q" in query_params) or force_execute:
-    
-    # 주소창 초기화로 뒤로가기/새로고침 시 오작동 방지
-    if "q" in st.query_params:
-        st.query_params.clear()
+# 메인 검색 버튼 터치 시 상태 활성화
+if st.button("🚀 자동 분석 실행", use_container_width=True):
+    st.session_state['search_target'] = user_input
+    st.session_state['search_period'] = period_choice
+    st.session_state['run_analysis'] = True
 
-    code, yf_ticker, market_type, real_name = get_stock_info(user_input)
+# --- 📈 5. 진짜 실시간 주가 데이터 분석 실행 영역 (버튼 및 히스토리 원터치 통합) ---
+if st.session_state['run_analysis']:
+    # 실행 직후 플래그를 꺼서 불필요한 연속 렌더링 방지
+    st.session_state['run_analysis'] = False
+    
+    code, yf_ticker, market_type, real_name = get_stock_info(st.session_state['search_target'])
     
     with st.spinner("🚀 글로벌 증권 데이터 분석 중..."):
         st.info(f"🎯 **[{real_name}]** ({market_type} / 티커: {yf_ticker}) 종목을 실시간 분석합니다.")
@@ -239,19 +230,18 @@ if st.button("🚀 자동 분석 실행", use_container_width=True) or ("q" in q
                 elif score == 0: op_text = "⚪ 관망 유지"
                 else: op_text = "🔴 비중 축소"
                 
-                # 💾 [핵심 로직] 중복 확인 후 브라우저 영구 스토리지에 백업 이벤트를 전달
-                history_exists = any(h['name'] == real_name and h['period'] == period_choice for h in st.session_state['search_history'])
+                # 중복 확인 후 브라우저 영구 스토리지에 백업 이벤트를 전달
+                history_exists = any(h['name'] == real_name and h['period'] == st.session_state['search_period'] for h in st.session_state['search_history'])
                 if not history_exists:
                     st.session_state['search_history'].append({
                         'name': real_name,
-                        'period': period_choice,
+                        'period': st.session_state['search_period'],
                         'opinion': op_text
                     })
-                    # 자바스크립트를 통해 브라우저 스토리지에 강제 주입 명령 전송
                     html(f"""<script>window.parent.postMessage({{type: 'save_history', data: {json.dumps(st.session_state['search_history'])} }}, '*');</script>""", height=0)
                     st.rerun()
                 
-                # 메인 화면 지표 정보 출력
+                # 대시보드 지표 카드 출력
                 st.subheader("📊 주요 정량 지표 요약")
                 unit = "원" if market_type == "국내시장" else "$"
                 
