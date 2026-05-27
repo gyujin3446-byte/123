@@ -7,7 +7,7 @@ import datetime
 st.set_page_config(page_title="모바일 주식 분석기", page_icon="📱", layout="centered")
 
 st.title("📱 모바일 주식 분석기 프로")
-st.caption("스마트폰 최적화 / 가독성 극대화 재무 리포트 버전")
+st.caption("스마트폰 최적화 / 5개년 재무제표 완벽 연동 버전")
 
 # 한국거래소(KRX) 종목 사전 로드 (캐싱으로 속도 최적화)
 @st.cache_data
@@ -80,19 +80,12 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     ma20_val = df['SMA_20'].iloc[-1]
                     rsi_val = df['RSI_14'].iloc[-1]
                     
-                    # 2. 정식 거래소 데이터 매핑
+                    # 기본 PER, PBR 메타 정보 획득
                     per_val, pbr_val = '정보 없음', '정보 없음'
-                    stocks_name = "해당 종목"
-                    market_type = "국내시장"
-                    industry = "기반 산업"
-                    
                     if not krx_list.empty:
                         target_info = krx_list[krx_list['Code'] == code]
                         if not target_info.empty:
                             stock_meta = target_info.iloc[0]
-                            stocks_name = stock_meta.get('Name', '종목')
-                            market_type = stock_meta.get('Market', '국내시장')
-                            industry = stock_meta.get('Sector', '기반 산업')
                             if 'PER' in target_info.columns: per_val = stock_meta['PER']
                             if 'PBR' in target_info.columns: pbr_val = stock_meta['PBR']
                     
@@ -133,59 +126,106 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     df['매도선(70)'] = 70
                     st.line_chart(df[['RSI_14', '매수선(30)', '매도선(70)']])
                     
-                    # 📋 [업그레이드] 정식 데이터 기반의 핵심 재무제표 표 출력
-                    st.subheader("📋 핵심 재무제표 요약")
+                    # 📋 에프앤가이드 원본 테이블 추출 시스템
+                    st.subheader("📋 핵심 재무제표 (최근 5개년 추이)")
                     
-                    # 거래소 데이터북의 정량 값 추출 후 가독성 좋은 표로 가공
-                    if not krx_list.empty and code in krx_list['Code'].values:
-                        meta = krx_list[krx_list['Code'] == code].iloc[0]
+                    fnguide_url = f"https://comp.fnguide.com/SVO2/ASP/SVD_Main.asp?gicode=A{code}"
+                    
+                    try:
+                        raw_tables = pd.read_html(fnguide_url)
+                        target_table = None
                         
-                        # 1억 단위나 백만 단위 등 거래소 원본 수치를 깔끔한 포맷으로 변환
-                        def format_amount(val):
-                            try:
-                                if pd.isna(val) or val == 0: return "-"
-                                return f"{float(val)/100000000:,.1f}억" if abs(val) > 1000000 else f"{int(val):,}원"
-                            except:
-                                return str(val)
+                        for t in raw_tables:
+                            first_col_str = "".join(t.iloc[:, 0].astype(str).tolist())
+                            if '매출' in first_col_str and '영업이익' in first_col_str:
+                                target_table = t
+                                break
                                 
-                        financial_data = [
-                            ["📈 매출액 (외형 성장)", format_amount(meta.get('Sales', '-'))],
-                            ["💰 영업이익 (알짜 수익)", format_amount(meta.get('OperatingProfit', '-'))],
-                            ["💵 당기순이익 (최종 이익)", format_amount(meta.get('NetIncome', '-'))],
-                            ["🏢 자산총계 (기반 체급)", format_amount(meta.get('Assets', '-'))],
-                            ["📉 부채총계 (재무 리스크)", format_amount(meta.get('Liabilities', '-'))]
-                        ]
-                        
-                        fin_df = pd.DataFrame(financial_data, columns=["핵심 재무 지표 항목", "최근 결산 실적 수치"])
-                        st.dataframe(fin_df, use_container_width=True, hide_index=True)
-                    else:
-                        st.info("해당 종목의 재무 데이터 규격을 정형화하는 중입니다.")
-                    
-                    # 🔍 [업그레이드] 한 줄 한 줄 가독성을 극대화한 AI 핵심 재무 진단 리포트
-                    st.subheader("🔍 AI 핵심 재무 진단")
-                    
-                    # 1. 성장 및 추세 진단
-                    if current_price > ma20_val:
-                        st.info("📈 **성장 및 추세**\n\n현재 주가가 20일 생명선 위에 안전하게 안착했습니다. 중단기 매수세가 살아있으며, 흐름이 우상향하는 긍정적인 성장 궤도에 진입해 있습니다.")
-                    else:
-                        st.warning("⚠️ **성장 및 추세**\n\n현재 주가가 20일 생명선 아래에 위치해 있습니다. 단기 하방 압력이 존재하므로 무리한 진입보다는 주요 지지선 낙폭을 먼저 확인하는 것이 안전합니다.")
-                        
-                    # 2. 밸류에이션(PER) 진단
-                    if isinstance(per_val, (int, float)) and per_val > 0:
-                        if per_val <= 12:
-                            st.success(f"🔥 **밸류에이션 (적정 가치)**\n\n현재 PER이 {per_val:.1f}배 수준입니다. 기업이 벌어들이는 알짜 수익력에 비해 주가가 상당히 저평가되어 있어 가격 메리트가 매우 뛰어난 구간입니다.")
-                        elif per_val >= 28:
-                            st.error(f"🚨 **밸류에이션 (고평가 경고)**\n\n현재 PER이 {per_val:.1f}배 수준으로 미래 성장 기대감이 선반영된 다소 무거운 자리입니다. 추가 수급이나 실적 받침 여부를 꼼꼼히 대조해 보아야 합니다.")
+                        if target_table is not None:
+                            # 첫 번째 열을 문자열로 깔끔히 정비한 후 인덱스로 지정
+                            target_table.iloc[:, 0] = target_table.iloc[:, 0].astype(str).str.replace(' ', '')
+                            target_table.set_index(target_table.columns[0], inplace=True)
+                            
+                            # 2010~2020년대 연도 컬럼만 안전하게 필터링 (최대 가로 5개 칸)
+                            valid_cols = [c for c in target_table.columns if '20' in str(c)]
+                            valid_cols = valid_cols[:5]
+                            
+                            # 추출할 5가지 핵심 행 목록
+                            row_mapping = {
+                                '매출액': '📈 매출액 (억 원)',
+                                '영업이익': '💰 영업이익 (억 원)',
+                                '당기순이익': '💵 당기순이익 (억 원)',
+                                '자산총계': '🏢 자산총계 (기반 체급)',
+                                '부채총계': '📉 부채총계 (재무 리스크)'
+                            }
+                            
+                            final_rows = []
+                            extracted_values = {}
+                            
+                            for f_key, display_name in row_mapping.items():
+                                # 이름이 부분 포함되는 행 찾기
+                                matched_idx = [idx for idx in target_table.index if f_key in idx]
+                                if matched_idx:
+                                    row_data = target_table.loc[matched_idx[0]]
+                                    if isinstance(row_data, pd.DataFrame):
+                                        row_data = row_data.iloc[0]
+                                        
+                                    vals = row_data[valid_cols].values
+                                    extracted_values[f_key] = vals
+                                    
+                                    # 값 포맷팅
+                                    formatted_cells = []
+                                    for v in vals:
+                                        try:
+                                            if pd.isna(v) or str(v) in ['nan', '-', '']:
+                                                formatted_cells.append("-")
+                                            else:
+                                                formatted_cells.append(f"{float(v):,.1f}억")
+                                        except:
+                                            formatted_cells.append(str(v))
+                                    final_rows.append([display_name] + formatted_cells)
+                            
+                            if final_rows:
+                                # 🔥 [핵심 수정] 타임에러를 일으키던 split 연산을 완전히 제거하고, 원본 헤더 이름을 안전하게 문자열 변환하여 사용
+                                str_headers = ["핵심 회계 지표 항목"] + [str(c) for c in valid_cols]
+                                output_df = pd.DataFrame(final_rows, columns=str_headers)
+                                
+                                # 화면에 정갈한 5개년 가로 배치 표 출력!
+                                st.dataframe(output_df, use_container_width=True, hide_index=True)
+                                
+                                # 🔍 한 줄 한 줄 가독성을 극대화한 AI 핵심 재무 진단 리포트
+                                st.subheader("🔍 AI 핵심 재무 진단")
+                                
+                                # 1. 성장 및 추세 진단
+                                if current_price > ma20_val:
+                                    st.info("📈 **성장 및 추세**\n\n현재 주가가 20일 생명선 위에 안전하게 안착했습니다. 중단기 매수세가 살아있으며, 흐름이 우상향하는 긍정적인 성장 궤도에 진입해 있습니다.")
+                                else:
+                                    st.warning("⚠️ **성장 및 추세**\n\n현재 주가가 20일 생명선 아래에 위치해 있습니다. 단기 하방 압력이 존재하므로 무리한 진입보다는 주요 지지선 낙폭을 먼저 확인하는 것이 안전합니다.")
+                                    
+                                # 2. 매출 실적 추이 진단
+                                if '매출액' in extracted_values and len(extracted_values['매출액']) >= 2:
+                                    s_data = extracted_values['매출액']
+                                    try:
+                                        if float(str(s_data[-1]).replace(',','')) > float(str(s_data[-2]).replace(',','')):
+                                            st.success("🔥 **매출 성장세 (외형 성장)**\n\n최근 연간 매출액이 직전 년도 대비 확실하게 증가했습니다. 시장 점유율을 견고하게 넓혀가며 기업의 체급이 건강하게 커지고 있는 아주 긍정적인 신호입니다.")
+                                        else:
+                                            st.warning("🧐 **매출 성장세 (외형 정체)**\n\n최근 연간 매출 규모가 직전 년도 대비 다소 정체되거나 소폭 감소했습니다. 전방 산업의 수요가 일시적으로 둔화되었을 가능성이 있으니 다음 분기 실적 턴어라운드를 주시하세요.")
+                                    except:
+                                        pass
+                                
+                                # 3. 수급 및 RSI 온도계 진단
+                                if rsi_val <= 40:
+                                    st.success("✨ **수급 상태 (RSI 지수)**\n\nRSI 지수가 40 이하인 과매도(심리적 공포) 영역입니다. 단기 낙폭 과대로 인해 시장에 싼 매물이 나온 상태이므로, 기술적 반등을 노린 분할 매수 접근이 아주 유효합니다.")
+                                elif rsi_val >= 65:
+                                    st.error("🚨 **수급 상태 (RSI 지수)**\n\nRSI 지수가 65 이상으로 시장의 뜨거운 광기와 흥분이 섞인 과열권에 진입했습니다. 주가가 고점에 다다랐을 확률이 높으니 추격 매수보다는 분할 익절 타이밍을 노리세요.")
+                                else:
+                                    st.info("⏳ **수급 상태 (RSI 지수)**\n\nRSI 지수가 40~60 사이의 안정적인 밸런스를 유지하고 있습니다. 매수세와 매도세의 균형이 단단하여 급격한 붕괴 위험이 적은 수급 상태입니다.")
+                            else:
+                                st.write("재무제표의 핵심 지표 항목을 파싱하지 못했습니다.")
                         else:
-                            st.info(f"🧐 **... 투자 밸류에이션**\n\n현재 PER이 {per_val:.1f}배 수준으로 업종 평균 정상 범주 안에서 안정적인 가치 평가를 받고 있습니다.")
-                    
-                    # 3. 수급 및 RSI 온도계 진단
-                    if rsi_val <= 40:
-                        st.success("✨ **수급 상태 (RSI 지수)**\n\nRSI 지수가 40 이하인 과매도(심리적 공포) 영역입니다. 단기 낙폭 과대로 인해 시장에 싼 매물이 나온 상태이므로, 기술적 반등을 노린 분할 매수 접근이 아주 유효합니다.")
-                    elif rsi_val >= 65:
-                        st.error("🚨 **수급 상태 (RSI 지수)**\n\nRSI 지수가 65 이상으로 시장의 뜨거운 광기와 흥분이 섞인 과열권에 진입했습니다. 주가가 고점에 다다랐을 확률이 높으니 추격 매수보다는 분할 익절 타이밍을 노리세요.")
-                    else:
-                        st.info("⏳ **수급 상태 (RSI 지수)**\n\nRSI 지수가 40~60 사이의 안정적인 밸런스를 유지하고 있습니다. 매수세와 매도세의 균형이 단단하여 급격한 붕괴 위험이 적은 평온한 수급 상태입니다.")
+                            st.warning("⚠️ 해당 종목의 5개년 연간 실적 데이터를 구성하는 중입니다.")
+                    except Exception as ex:
+                        st.error(f"재무 정보 파싱 중 오류 발생: {ex}")
                         
             except Exception as e:
                 st.error(f"분석 중 오류가 발생했습니다: {e}")
