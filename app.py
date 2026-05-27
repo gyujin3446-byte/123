@@ -143,11 +143,15 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                 break
                                 
                         if target_table is not None:
+                            # 🔥 [버그 근본 해결 치트키] 표 내부와 머리글의 모든 빈 칸(NaN)을 "데이터"라는 글자로 청소해서 수치 꼬임 완벽 방어
+                            target_table.columns = target_table.columns.astype(str).fillna("데이터")
+                            target_table.fillna("-", inplace=True)
+                            
                             # 첫 번째 열을 인덱스로 지정
                             target_table.iloc[:, 0] = target_table.iloc[:, 0].astype(str).str.replace(' ', '')
                             target_table.set_index(target_table.columns[0], inplace=True)
                             
-                            # 3개년 데이터 열만 필터링 (가로 폭 최적화)
+                            # 3개년 데이터 열만 안전하게 필터링
                             valid_cols = [c for c in target_table.columns if '20' in str(c)]
                             valid_cols = valid_cols[:3]
                             
@@ -185,7 +189,6 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                     final_rows.append([display_name] + formatted_cells)
                             
                             if final_rows:
-                                # 🔥 [에러 전면 차단] 문제가 되던 split 컴프리헨션을 전면 삭제하고 판다스 기본 함수만 활용
                                 clean_headers = ["핵심 회계 지표 항목"]
                                 for col in valid_cols:
                                     clean_headers.append(re.sub(r'\(.*\)', '', str(col)).strip())
