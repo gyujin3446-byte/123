@@ -11,9 +11,15 @@ st.set_page_config(page_title="모바일 주식 분석기", page_icon="📱", la
 st.title("📱 글로벌 주식 분석기 프로")
 st.caption("스마트폰 최적화 / 국내 및 해외주식 100% 한글 검색 지원 버전")
 
-# --- 💾 1. 검색 히스토리 저장소 초기화 ---
+# --- 💾 1. 검색 히스토리 및 입력 폼 상태 저장소 초기화 ---
 if 'search_history' not in st.session_state:
     st.session_state['search_history'] = []
+
+# 히스토리 클릭 시 메인 입력창들을 강제 동기화하기 위한 뼈대 세팅
+if 'widget_input' not in st.session_state:
+    st.session_state['widget_input'] = "삼성전자"
+if 'widget_period' not in st.session_state:
+    st.session_state['widget_period'] = "6개월"
 
 # 한국거래소(KRX) 종목 사전 로드 (캐싱으로 속도 최적화)
 @st.cache_data
@@ -93,41 +99,38 @@ def calculate_rsi(series, period=14):
     rs = ema_up / ema_down
     return 100 - (100 / (1 + rs))
 
-# --- 📋 2. 모바일 내비게이션 사이드바 (검색 히스토리) ---
+# --- 📋 2. 모바일 내비게이션 사이드바 (검색 히스토리 및 원터치 연동) ---
 st.sidebar.header("📜 나의 검색 히스토리")
+
+# 히스토리 버튼이 눌렸는지 기억하는 플래그 변수
+hist_triggered = False
+
 if not st.session_state['search_history']:
     st.sidebar.caption("아직 검색한 내역이 없습니다.")
 else:
     st.sidebar.caption("💡 아래 항목을 터치하면 즉시 재분석합니다.")
-    # 히스토리 리스트 역순출력 (최신 검색이 맨 위로)
     for idx, item in enumerate(reversed(st.session_state['search_history'])):
-        # 스마트폰에서 터치하기 편하도록 가로로 긴 버튼 구성
         btn_label = f"🔍 {item['name']} ({item['period']}) -> {item['opinion'].split(' ')[0]}"
         if st.sidebar.button(btn_label, key=f"hist_{len(st.session_state['search_history'])-1-idx}", use_container_width=True):
-            # 히스토리 터치 시 입력창과 기간을 강제로 주입하고 페이지 새로고침 효과
-            st.session_state['auto_search_input'] = item['name']
-            st.session_state['auto_search_period'] = item['period']
-            st.rerun()
+            # 🔥 [버그 수정 1] 히스토리 클릭 시 메인 입력창 위젯들의 세션 상태값을 직접 동기화 변환
+            st.session_state['widget_input'] = item['name']
+            st.session_state['widget_period'] = item['period']
+            hist_triggered = True
 
-# --- 📱 3. 메인 화면 UI 구성 ---
-# 히스토리 링크 연동을 위한 세션 상태 바인딩
-default_input = st.session_state.get('auto_search_input', "삼성전자")
-default_period = st.session_state.get('auto_search_period', "6개월")
+# --- 📱 3. 메인 화면 UI 구성 (상태 바인딩 연동) ---
+# key 매핑을 지정하여 히스토리 데이터와 위젯의 데이터 상태를 물려줍니다.
+user_input = st.text_input("🔍 국내/해외 종목 이름 입력", key='widget_input')
 
-user_input = st.text_input("🔍 국내/해외 종목 이름 입력", value=default_input)
-period_choice = st.selectbox("📅 분석 기간 선택", ["3개월", "6개월", "1년", "3년"], index=["3개월", "6개월", "1년", "3년"].index(default_period))
+period_options = ["3개월", "6개월", "1년", "3년"]
+period_choice = st.selectbox("📅 분석 기간 선택", period_options, key='widget_period')
 
 period_map = {"3개월": 90, "6개월": 180, "1년": 365, "3년": 1095}
 days = period_map[period_choice]
 
-# 자동 검색 실행 조건 트리거 (버튼 클릭 혹은 히스토리 터치 연동)
-trigger_search = st.button("🚀 자동 분석 실행", use_container_width=True) or ('auto_search_input' in st.session_state)
-
-if trigger_search:
-    # 히스토리 자동 검색 트리거 해제 (무한 루프 방지)
-    if 'auto_search_input' in st.session_state:
-        del st.session_state['auto_search_input']
-        del st.session_state['auto_search_period']
+# 🔥 [버그 수정 2] "자동 분석 실행" 버튼을 누르거나, 사이드바 히스토리를 클릭했을 때 동시에 즉시 트리거 작동!
+if st.button("🚀 자동 분석 실행", use_container_width=True) or hist_triggered:
+    # 무한 루프나 상태 꼬임을 방지하기 위해 플래그 초기화
+    hist_triggered = False
 
     code, yf_ticker, market_type, real_name = get_stock_info(user_input)
     
@@ -187,7 +190,7 @@ if trigger_search:
                 elif score == 0: op_text, op_status = "⚪ 관망 유지", "info"
                 else: op_text, op_status = "🔴 비중 축소", "error"
                 
-                # 💾 [핵심 로직] 중복 검색 방지하면서 히스토리에 데이터 적재
+                # 중복 검색 방지하면서 히스토리에 데이터 적재
                 history_exists = any(h['name'] == real_name and h['period'] == period_choice for h in st.session_state['search_history'])
                 if not history_exists:
                     st.session_state['search_history'].append({
@@ -195,9 +198,9 @@ if trigger_search:
                         'period': period_choice,
                         'opinion': op_text
                     })
-                    st.rerun() # 사이드바 메뉴 실시간 갱신용
+                    st.rerun() # 내역 실시간 동기화 갱신
                 
-                # 메인 화면 스코어보딩 출력
+                # 메인 화면 지표 정보 출력
                 st.subheader("📊 주요 정량 지표 요약")
                 unit = "원" if market_type == "국내시장" else "$"
                 
