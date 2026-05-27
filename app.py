@@ -21,29 +21,55 @@ def load_krx_list():
 
 krx_list = load_krx_list()
 
+# 🔥 [핵심 추가] 주요 해외 주식 한글 검색 매핑 사전 (오작동 100% 방어)
+GLOBAL_SEARCH_MAP = {
+    '엔비디아': 'NVDA',
+    '팔란티어': 'PLTR',
+    '애플': 'AAPL',
+    '테슬라': 'TSLA',
+    '마이크로소프트': 'MSFT',
+    '마소': 'MSFT',
+    '구글': 'GOOGL',
+    '알파벳': 'GOOGL',
+    '아마존': 'AMZN',
+    '메타': 'META',
+    '페이스북': 'META',
+    '넷플릭스': 'NFLX',
+    '아이온큐': 'IONQ',
+    '스타벅스': 'SBUX',
+    '코카콜라': 'KO'
+}
+
 def search_global_ticker(keyword):
     """
-    야후 파이낸스 자체 통합 검색 API를 이용하여 
-    한글 기업명(예: 팔란티어, 애플)에 맞는 글로벌 티커를 추적하는 함수
+    한글 기업명에 맞는 글로벌 티커를 추적하는 함수 (내부 사전 1순위 -> 야후 API 2순위)
     """
-    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={keyword}&lang=ko-KR"
+    keyword_clean = keyword.strip().replace(' ', '')
+    
+    # 1. 자주 검색하는 주요 미국 주식은 내부 사전에서 즉시 정밀 매칭 (오류 방지)
+    if keyword_clean in GLOBAL_SEARCH_MAP:
+        ticker = GLOBAL_SEARCH_MAP[keyword_clean]
+        return ticker, ticker, "미국시장", keyword
+        
+    # 2. 사전에 없는 주식은 야후 금융 API 통합 검색 활용
+    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={keyword_clean}&lang=ko-KR"
     headers = {'User-Agent': 'Mozilla/5.0'}
     
     try:
         res = requests.get(url, headers=headers, timeout=5).json()
         quotes = res.get('quotes', [])
         if quotes:
-            # 검색 결과 중 가장 신뢰도가 높은 첫 번째 종목 정보 반환
             best_match = quotes[0]
             ticker = best_match.get('symbol', '').upper()
             shortname = best_match.get('shortname') or best_match.get('longname') or keyword
-            exchange = best_match.get('exchange', '')
             
-            # 한국 거래소 접미사(.KS, .KQ)가 붙어있는지 확인하여 시장 구분
+            # 야후가 엉뚱하게 한글을 티커로 뱉었거나 비어있으면 차단
+            if not ticker or any(ord('가') <= ord(ch) <= ord('힣') for ch in ticker):
+                return None, None, None, None
+                
             if ticker.endswith('.KS') or ticker.endswith('.KQ'):
                 return ticker.split('.')[0], ticker, "국내시장", shortname
             
-            # 미국 주요 거래소(NYQ, NMS, PNK 등) 기반의 해외주식 판단
             return ticker, ticker, "미국시장", shortname
     except:
         pass
@@ -55,7 +81,11 @@ def get_stock_info(user_input):
     """
     name_clean = user_input.strip()
     
-    # 1. 숫자로 된 국내 종목 코드인 경우 (예: 005930)
+    # 1. 영문 알파벳으로만 입력한 경우 -> 미국 주식 티커로 즉시 처리 (예: PLTR, NVDA)
+    if name_clean.isalpha() and name_clean.isupper():
+        return name_clean, name_clean, "미국시장", name_clean
+
+    # 2. 숫자로 된 국내 종목 코드인 경우 (예: 005930)
     if name_clean.isdigit():
         if not krx_list.empty:
             res = krx_list[krx_list['Code'] == name_clean]
@@ -66,24 +96,25 @@ def get_stock_info(user_input):
                 return name_clean, yf_suffix, "국내시장", name
         return name_clean, f"{name_clean}.KS", "국내시장", name_clean
 
-    # 2. 국내 거래소 사전에 완벽히 일치하거나 글자가 포함된 국내 주식이 있는지 1순위 검사
-    if not krx_list.empty:
-        matched_stocks = krx_list[krx_list['Name'].str.contains(name_clean, case=False, na=False)]
-        if not matched_stocks.empty:
-            representative_stock = matched_stocks.iloc[0]
-            # 검색어가 완전히 같거나, 국내 대형주 사전에 포착되면 국내 모드로 리턴
-            code = representative_stock['Code']
-            name = representative_stock['Name']
-            mkt = str(representative_stock['Market'])
-            yf_suffix = f"{code}.KS" if 'KOSPI' in mkt else f"{code}.KQ"
-            return code, yf_suffix, "국내시장", name
+    # 3. 국내 거래소 사전에 완벽히 일치하거나 글자가 포함된 국내 주식이 있는지 1순위 검사
+    # 단, 사용자가 입력한 키워드가 우리가 등록한 미국 주식 사전(엔비디아 등)에 없을 때만 국장 사전을 뒤집니다.
+    if name_clean not in GLOBAL_SEARCH_MAP:
+        if not krx_list.empty:
+            matched_stocks = krx_list[krx_list['Name'].str.contains(name_clean, case=False, na=False)]
+            if not matched_stocks.empty:
+                representative_stock = matched_stocks.iloc[0]
+                code = representative_stock['Code']
+                name = representative_stock['Name']
+                mkt = str(representative_stock['Market'])
+                yf_suffix = f"{code}.KS" if 'KOSPI' in mkt else f"{code}.KQ"
+                return code, yf_suffix, "국내시장", name
 
-    # 3. 국내 사전에 없다면 해외주식 한글명/영문티커로 간주하고 글로벌 AI 검색 엔진 가동
+    # 4. 글로벌 하이브리드 검색망 가동
     g_code, g_yf_ticker, g_market, g_name = search_global_ticker(name_clean)
     if g_yf_ticker:
         return g_code, g_yf_ticker, g_market, g_name
 
-    # 4. 최후의 보루 (에러 방지용 영문 대문자 처리)
+    # 5. 최후의 보루 (에러 방지용 영문 대문자 처리)
     ticker_upper = name_clean.upper()
     return ticker_upper, ticker_upper, "미국시장", ticker_upper
 
@@ -97,7 +128,7 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # 모바일 터치 UI 구성
-user_input = st.text_input("🔍 국내/해외 종목 이름 입력", value="팔란티어")
+user_input = st.text_input("🔍 국내/해외 종목 이름 입력", value="엔비디아")
 period_choice = st.selectbox("📅 분석 기간 선택", ["3개월", "6개월", "1년", "3년"], index=1)
 
 period_map = {"3개월": 90, "6개월": 180, "1년": 365, "3년": 1095}
