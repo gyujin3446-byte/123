@@ -126,33 +126,30 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     df['매도선(70)'] = 70
                     st.line_chart(df[['RSI_14', '매수선(30)', '매도선(70)']])
                     
-                    # 📋 [완벽 수정] 에프앤가이드 정식 데이터 허브를 이용한 5개년 재무 표 빌드
+                    # 📋 에프앤가이드 정식 데이터 허브를 이용한 5개년 재무 표 빌드
                     st.subheader("📋 핵심 재무제표 (최근 5개년 추이)")
                     
-                    # 정식 FnGuide 데이터북 주소 연결 (차단 차단 요소 없음)
                     fnguide_url = f"https://comp.fnguide.com/SVO2/ASP/SVD_Main.asp?gicode=A{code}"
                     
                     try:
-                        # lxml 엔진을 통해 백업 데이터가 담긴 포괄적 재무제표 탐색
                         raw_tables = pd.read_html(fnguide_url)
                         target_table = None
                         
                         for t in raw_tables:
-                            # '매출액' 컬럼이나 첫 번째 열에 이 단어가 박혀있는 연간 표 레이아웃 수색
                             first_col_str = "".join(t.iloc[:, 0].astype(str).tolist())
-                            if '매출액' in first_col_str and '영업이익' in first_col_str:
+                            # '매출액'과 '영업이익' 글자 자체를 유연하게 포괄하는 표 레이아웃 수색
+                            if '매출' in first_col_str and '영업이익' in first_col_str:
                                 target_table = t
                                 break
                                 
                         if target_table is not None:
-                            # 첫 컬럼명을 기준 인덱스로 잡음
+                            # 첫 컬럼명을 인덱스로 고정
                             target_table.set_index(target_table.columns[0], inplace=True)
                             
-                            # 최근 5개년 데이터 열(Column)만 정밀 커팅
+                            # 최근 5개년 데이터 열(Column) 슬라이싱
                             valid_cols = [c for c in target_table.columns if '20' in str(c) or '전년' in str(c)]
-                            valid_cols = valid_cols[:5] # 정확히 5개년 데이터 슬라이싱
+                            valid_cols = valid_cols[:5]
                             
-                            # 우리가 보여줄 5대 핵심 지표 선별
                             display_rows = {
                                 '매출액': '📈 매출액 (외형 성장)',
                                 '영업이익': '💰 영업이익 (알짜 수익)',
@@ -162,29 +159,25 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                             }
                             
                             final_rows = []
-                            extracted_values = {} # 분석용 원본 값 보관함
+                            extracted_values = {}
                             
                             for key, display_name in display_rows.items():
-                                # 이름이 미세하게 다를 수 있으므로 글자가 매칭되는 행 추적
-                                matched_idx = [idx for idx in target_table.index if key in str(idx)]
+                                # 🔥 [핵심 수정] 글자가 완벽히 같지 않아도 포함되어 있으면 무조건 매칭 (예: '영업이익(손실)'도 탈탈 털어 가져옴)
+                                matched_idx = [idx for idx in target_table.index if key in str(idx).replace(' ', '')]
                                 if matched_idx:
                                     row_data = target_table.loc[matched_idx[0]]
-                                    # 만약 다중 데이터면 첫 줄 가공
                                     if isinstance(row_data, pd.DataFrame):
                                         row_data = row_data.iloc[0]
                                         
-                                    # 분석에 쓸 최근 2개년 수치 확보 (보통 표의 왼쪽이 과거, 오른쪽이 최신)
                                     subset_vals = row_data[valid_cols].values
                                     extracted_values[key] = subset_vals
                                     
-                                    # 보기 좋게 수치 단위 변환 및 포맷팅 (원 수치가 억 원 단위 기준임)
                                     formatted_cells = []
                                     for cell in subset_vals:
                                         try:
                                             if pd.isna(cell) or str(cell) in ['nan', '-', '']:
                                                 formatted_cells.append("-")
                                             else:
-                                                # 에프앤가이드 원본 데이터는 대개 '억 원' 단위 기준 수치임
                                                 formatted_cells.append(f"{float(cell):,.1f}억")
                                         except:
                                             formatted_cells.append(str(cell))
@@ -205,15 +198,14 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                 else:
                                     st.warning("⚠️ **성장 및 추세**\n\n현재 주가가 20일 생명선 아래에 위치해 있습니다. 단기 하방 압력이 존재하므로 무리한 진입보다는 주요 지지선 낙폭을 먼저 확인하는 것이 안전합니다.")
                                     
-                                # 2. 매출 및 실적 추이 진단 (5개년 리스트의 가장 최근 2개 우측 값 비교)
+                                # 2. 매출 및 실적 추이 진단
                                 if '매출액' in extracted_values and len(extracted_values['매출액']) >= 2:
                                     s_data = extracted_values['매출액']
-                                    # 뒤에서 첫 번째가 최신, 뒤에서 두 번째가 직전 년도
                                     try:
-                                        if float(s_data[-1]) > float(s_data[-2]):
-                                            st.success("🔥 **매출 성장세 (외형 성장)**\n\n최근 결산 기준 매출액이 직전 년도 대비 확실하게 증가했습니다. 시장 점유율을 견고하게 넓혀가며 회사의 외형 체급이 건강하게 커지고 있는 아주 긍정적인 신호입니다.")
+                                        if float(str(s_data[-1]).replace(',','')) > float(str(s_data[-2]).replace(',','')):
+                                            st.success("🔥 **매출 성장세 (외형 성장)**\n\n최근 연간 매출액이 직전 년도 대비 확실하게 증가했습니다. 시장 점유율을 견고하게 넓혀가며 기업의 체급이 건강하게 커지고 있는 아주 긍정적인 신호입니다.")
                                         else:
-                                            st.warning("🧐 **매출 성장세 (외형 정체)**\n\n최근 연간 매출 규모가 직전 년도 대비 다소 정체되거나 소폭 감소했습니다. 전방 산업의 수요가 일시적으로 둔화되었거나 경쟁이 심화되었을 가능성이 있으니 분기별 턴어라운드를 주시하세요.")
+                                            st.warning("🧐 **매출 성장세 (외형 정체)**\n\n최근 연간 매출 규모가 직전 년도 대비 다소 정체되거나 소폭 감소했습니다. 전방 산업의 수요가 일시적으로 둔화되었을 가능성이 있으니 다음 분기 실적 턴어라운드를 주시하세요.")
                                     except:
                                         pass
                                 
@@ -223,13 +215,13 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                 elif rsi_val >= 65:
                                     st.error("🚨 **수급 상태 (RSI 지수)**\n\nRSI 지수가 65 이상으로 시장의 뜨거운 광기와 흥분이 섞인 과열권에 진입했습니다. 주가가 고점에 다다랐을 확률이 높으니 추격 매수보다는 분할 익절 타이밍을 노리세요.")
                                 else:
-                                    st.info("⏳ **수급 상태 (RSI 지수)**\n\nRSI 지수가 40~60 사이의 안정적인 밸런스를 유지하고 있습니다. 매수세와 매도세의 균형이 단단하여 급격한 붕괴 위험이 적은 평온한 수급 상태입니다.")
+                                    st.info("⏳ **수급 상태 (RSI 지수)**\n\nRSI 지수가 40~60 사이의 안정적인 밸런스를 유지하고 있습니다. 매수세와 매도세의 균형이 단단하여 급격한 붕괴 위험이 적은 수급 상태입니다.")
                             else:
                                 st.write("재무제표의 핵심 지표 항목을 파싱하지 못했습니다.")
                         else:
-                            st.warning("⚠️ 해당 종목의 5개년 연간 실적 데이터를 구성하는 중입니다. 잠시 후 다시 조회해 주세요.")
+                            st.warning("⚠️ 해당 종목의 5개년 연간 실적 데이터를 구성하는 중입니다.")
                     except Exception as ex:
-                        st.write("안전망 데이터 허브에서 재무 흐름을 정상적으로 정형화하였습니다. 잠시 후 새로고침해 주세요.")
+                        st.error(f"재무 정보 추출 중 예상치 못한 분석 도구 오류가 발생했습니다: {ex}")
                         
             except Exception as e:
                 st.error(f"분석 중 오류가 발생했습니다: {e}")
