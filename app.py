@@ -22,17 +22,12 @@ krx_list = load_krx_list()
 
 def get_stock_info(user_input):
     """
-    입력된 단어로 국내 종목 코드 또는 해외 티커 여부를 판별하는 스마트 함수
+    입력된 단어로 국내 종목 코드 또는 해외 티커 여부를 판별하는 정밀 함수
     리턴값: (조회용 코드/티커, 주가용 티커, 시장 구분, 진짜 종목명)
     """
     name_clean = user_input.strip()
     
-    # 1. 영문 티커 직접 입력인 경우 (예: PLTR, AAPL, TSLA) -> 미국 주식으로 판단
-    if name_clean.isalpha():
-        ticker_upper = name_clean.upper()
-        return ticker_upper, ticker_upper, "미국시장", ticker_upper
-        
-    # 2. 숫자로 된 국내 종목 코드인 경우 (예: 005930)
+    # 1. 숫자로 된 국내 종목 코드인 경우 (예: 005930)
     if name_clean.isdigit():
         if not krx_list.empty:
             res = krx_list[krx_list['Code'] == name_clean]
@@ -43,18 +38,21 @@ def get_stock_info(user_input):
                 return name_clean, yf_suffix, "국내시장", name
         return name_clean, f"{name_clean}.KS", "국내시장", name_clean
 
-    # 3. 한글 이름으로 국내 주식 검색인 경우 (예: 하이닉스, 삼성전자)
-    if not krx_list.empty:
-        matched_stocks = krx_list[krx_list['Name'].str.contains(name_clean, case=False, na=False)]
-        if not matched_stocks.empty:
-            representative_stock = matched_stocks.iloc[0]
-            code = representative_stock['Code']
-            name = representative_stock['Name']
-            mkt = str(representative_stock['Market'])
-            yf_suffix = f"{code}.KS" if 'KOSPI' in mkt else f"{code}.KQ"
-            return code, yf_suffix, "국내시장", name
-            
-    # 4. 그 외 특수 티커 처리 (예: BRK-B 등 기호 포함 미국 주식)
+    # 2. 한글 이름이 포함된 경우 -> 무조건 국내 주식으로 판단 및 부분 일치 검색
+    # 한글 문자열이 한 글자라도 들어있으면 국내 엔진을 타게 만듭니다.
+    if any(ord('가') <= ord(ch) <= ord('힣') for ch in name_clean):
+        if not krx_list.empty:
+            matched_stocks = krx_list[krx_list['Name'].str.contains(name_clean, case=False, na=False)]
+            if not matched_stocks.empty:
+                representative_stock = matched_stocks.iloc[0]
+                code = representative_stock['Code']
+                name = representative_stock['Name']
+                mkt = str(representative_stock['Market'])
+                yf_suffix = f"{code}.KS" if 'KOSPI' in mkt else f"{code}.KQ"
+                return code, yf_suffix, "국내시장", name
+        return name_clean, f"{name_clean}.KS", "국내시장", name_clean
+
+    # 3. 그 외 영문 알파벳인 경우 -> 미국 주식 티커로 처리 (예: PLTR, AAPL, NVDA)
     ticker_upper = name_clean.upper()
     return ticker_upper, ticker_upper, "미국시장", ticker_upper
 
@@ -68,7 +66,7 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # 모바일 터치 UI 구성
-user_input = st.text_input("🔍 종목 이름 또는 티커(예: 삼성전자, PLTR) 입력", value="삼성전자")
+user_input = st.text_input("🔍 종목 이름 또는 티커(예: 삼성전자, PLTR, 하이닉스) 입력", value="삼성전자")
 period_choice = st.selectbox("📅 분석 기간 선택", ["3개월", "6개월", "1년", "3년"], index=1)
 
 period_map = {"3개월": 90, "6개월": 180, "1년": 365, "3년": 1095}
@@ -82,7 +80,7 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
         st.info(f"🎯 **[{real_name}]** ({market_type}) 종목을 실시간 분석합니다.")
             
         try:
-            # 1. 주가 데이터 로드 및 보조지표 연산 (국내는 fdr, 미국은 yf로 분기하여 속도 및 안정성 보장)
+            # 1. 주가 데이터 로드 및 보조지표 연산
             end_date = datetime.date.today()
             start_date = end_date - datetime.timedelta(days=days + 40)
             
@@ -92,7 +90,7 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                 df = yf.download(yf_ticker, start=start_date, end=end_date)
                 
             if df.empty:
-                st.error(" 주가 데이터를 불러오지 못했습니다. 티커명을 다시 확인해 주세요.")
+                st.error(" 주가 데이터를 불러오지 못했습니다. 티커명이나 종목 이름을 다시 확인해 주세요.")
             else:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
@@ -108,7 +106,7 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                 ma20_val = df['SMA_20'].iloc[-1]
                 rsi_val = df['RSI_14'].iloc[-1]
                 
-                # 2. 하이브리드 가치 평가 데이터 매핑 (국내는 메타 사전, 미국은 yfinance 라이브 엔진)
+                # 2. 가치 평가 데이터 매핑
                 per_val, pbr_val = '정보 없음', '정보 없음'
                 
                 if market_type == "국내시장":
@@ -165,11 +163,10 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                 df['매도선(70)'] = 70
                 st.line_chart(df[['RSI_14', '매수선(30)', '매도선(70)']])
                 
-                # 📋 하이브리드 고신뢰 재무제표 표 출력 시스템
+                # 📋 핵심 재무제표 표 출력 시스템
                 st.subheader("📋 핵심 재무제표 요약")
                 
                 if market_type == "국내시장":
-                    # 국내 주식: 기존과 동일하게 거래소 메타 정보를 활용해 조립
                     meta = krx_list[krx_list['Code'] == code].iloc[0]
                     def format_amount(val):
                         try:
@@ -187,20 +184,17 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                     fin_df = pd.DataFrame(financial_data, columns=["핵심 재무 지표 항목", "최근 결산 실적 수치"])
                     st.dataframe(fin_df, use_container_width=True, hide_index=True)
                 else:
-                    # 미국 주식: yfinance의 실시간 장부 엔진을 가동하여 연간 리포트 매핑
                     try:
                         ticker_obj = yf.Ticker(yf_ticker)
                         stmt = ticker_obj.get_income_stmt()
                         
                         if not stmt.empty:
-                            # 필요한 행 이름 매핑 (미국식 재무제표 기준)
                             us_mapping = {
                                 'Total Revenue': '📈 매출액 (외형 성장)',
                                 'Operating Income': '💰 영업이익 (알짜 수익)',
                                 'Net Income': '💵 당기순이익 (최종 이익)'
                             }
                             us_rows = []
-                            # 최근 사용 가능한 연도 최대 3개 컬럼 사용
                             use_cols = list(stmt.columns[:3])
                             
                             for k, display in us_mapping.items():
@@ -216,13 +210,13 @@ if st.button("🚀 자동 분석 실행", use_container_width=True):
                                 us_df = pd.DataFrame(us_rows, columns=headers)
                                 st.dataframe(us_df, use_container_width=True, hide_index=True)
                             else:
-                                st.write("재무제표의 연간 세부 실적 항목을 정형화하는 중입니다.")
+                                st.write("재무제표의 세부 실적 지표를 빌드하는 중입니다.")
                         else:
-                            st.write("해당 해외 기업의 공시 연간 재무제표를 다운로드하는 중입니다.")
+                            st.write("해당 기업의 공시 연간 재무제표를 로드하는 중입니다.")
                     except:
-                        st.write("글로벌 금융망으로부터 재무 정보를 안전하게 로드하는 중입니다.")
+                        st.write("글로벌 금융망으로부터 재무 정보를 로드하는 중입니다.")
                 
-                # 🔍 한 줄 한 줄 가독성을 극대화한 AI 핵심 재무 진단 리포트
+                # 🔍 AI 핵심 재무 진단 리포트
                 st.subheader("🔍 AI 핵심 재무 진단")
                 
                 # 1. 성장 및 추세 진단
